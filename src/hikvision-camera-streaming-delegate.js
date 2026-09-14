@@ -207,9 +207,15 @@ class HikvisionCameraStreamingDelegate {
         this.metrics?.recordLiveStreamStarted(streamPurpose);
         this.stateMachine?.liveStarted(`homekit-live:${streamPurpose}`);
         session.process = this.spawnFfmpegFromRtspStream(request, session, rtspUrl, streamPurpose);
-        this.talkback?.startStream?.(request);
-        this.notifyLiveStreamStarted(request, streamPurpose);
-        this.bumpStreamWatchdog(request.sessionID, "start");
+        try {
+          this.talkback?.startStream?.(request);
+          this.notifyLiveStreamStarted(request, streamPurpose);
+          this.bumpStreamWatchdog(request.sessionID, "start");
+        } catch (error) {
+          this.terminateStreamProcess(request.sessionID, session, "start-failed");
+          this.sessions.delete(request.sessionID);
+          throw error;
+        }
         return;
       }
 
@@ -245,7 +251,7 @@ class HikvisionCameraStreamingDelegate {
     const payloadType = video.pt || 99;
     const keyframeInterval = Math.max(fps * 2, 20);
     const includeAudio = Boolean(session.audioPort && this.config.audio !== false);
-    const missAudioSampleRate = normalizeMissAudioSampleRate(this.config.missAudioSampleRate, this.config.model);
+    const missAudioSampleRate = normalizeDeviceAudioSampleRate(this.config.rtspAudioSampleRate);
     const homeKitAudioSampleRate = normalizeHomeKitAudioSampleRate(this.config.homeKitAudioSampleRate);
     const audioFilter = this.config.liveAudioFilter || this.config.audioFilter || defaultAudioFilter(missAudioSampleRate, homeKitAudioSampleRate, this.config);
 

@@ -433,9 +433,6 @@ function normalizeDeviceAudioSampleRate(value) {
   if (Number.isFinite(parsed) && parsed > 0) {
     return Math.floor(parsed);
   }
-  if (model === "hikvision.camera.v3") {
-    return 8000;
-  }
   return 8000;
 }
 
