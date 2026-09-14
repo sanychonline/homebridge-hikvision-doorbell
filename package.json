@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "displayName": "Hikvision Doorbell",
   "description": "Homebridge video doorbell plugin for Hikvision DS-KB8112-IM with RTSP media, Hik-Connect call events, HomeKit Secure Video, and HCNetSDK talkback.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sanychonline/homebridge-hikvision-doorbell.git"
+  },
+  "homepage": "https://github.com/sanychonline/homebridge-hikvision-doorbell#readme",
+  "bugs": {
+    "url": "https://github.com/sanychonline/homebridge-hikvision-doorbell/issues"
+  },
   "main": "src/index.js",
   "files": [
     "config.schema.json",
@@ -29,6 +37,9 @@
     "rtsp"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=18"
   },
