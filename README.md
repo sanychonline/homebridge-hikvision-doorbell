@@ -34,6 +34,29 @@ Known limitation:
 - Optional: Hik-Connect account with the indoor panel added, if you want doorbell button notifications
 - Optional: Hikvision Linux HCNetSDK runtime installed on the Homebridge host/container, if you want two-way audio
 
+## Installation from npm
+
+Install the published package in the same environment where Homebridge runs:
+
+```bash
+npm install -g homebridge-hikvision-doorbell@0.1.0
+```
+
+For a Docker-based Homebridge installation, run the command inside the Homebridge container or install it into the persistent Homebridge application directory. Restart Homebridge after installation:
+
+```bash
+docker exec homebridge npm install --prefix /homebridge homebridge-hikvision-doorbell@0.1.0
+docker restart homebridge
+```
+
+Do not copy the repository into a `local-plugin` directory. The plugin is loaded from npm and its runtime dependencies are managed by npm. Keep the HCNetSDK runtime separate from the npm package.
+
+To upgrade later:
+
+```bash
+npm install -g homebridge-hikvision-doorbell@latest
+```
+
 ## Recommended Homebridge config
 
 Use Homebridge UI where possible. A minimal JSON configuration looks like this:
