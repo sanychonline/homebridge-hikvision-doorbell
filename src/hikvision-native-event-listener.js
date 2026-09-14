@@ -165,7 +165,20 @@ class HikvisionNativeEventListener {
       return;
     }
 
-    if (message.type === "native-motion" || message.type === "motion-forward") {
+    if (message.type === "native-motion") {
+      this.platform.log.debug(`native.events.motion camera=${this.cameraName()} event=${message.type} command=${message.command || "unknown"} ok=${message.ok ?? "n/a"}`);
+      this.handlers.onMotion?.({
+        source: message.source || "hikvision-hcnet-sdk",
+        reason: "native-motion",
+        command: message.command,
+        alarmType: message.alarmType,
+        durationMs: this.config.motionHoldMs || this.config.hsvMotionDurationMs || 15000,
+        receivedAt: message.receivedAt || message.timestamp || Date.now(),
+      });
+      return;
+    }
+
+    if (message.type === "motion-forward") {
       this.platform.log.debug(`native.events.motion camera=${this.cameraName()} event=${message.type} command=${message.command || "unknown"} ok=${message.ok ?? "n/a"}`);
       return;
     }

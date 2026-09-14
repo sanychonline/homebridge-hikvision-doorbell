@@ -94,6 +94,7 @@ class HikvisionCameraAccessory {
 
     this.nativeEventListener = new HikvisionNativeEventListener(platform, config, {
       onDoorbell: (event) => this.triggerDoorbellEvent(event),
+      onMotion: (event) => this.handleMotionEvent(event, Characteristic),
     });
     this.nativeEventListener.start();
     this.hikConnectCallListener = new HikvisionHikConnectCallListener(platform, config, {

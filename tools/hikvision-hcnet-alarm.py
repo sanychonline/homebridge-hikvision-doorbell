@@ -16,9 +16,6 @@ import signal
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
-from pathlib import Path
 from typing import Any
 
 COMM_ALARM = 0x1100
@@ -76,63 +73,6 @@ def get_last_error(sdk: ctypes.CDLL) -> int:
         return int(sdk.NET_DVR_GetLastError())
     except Exception:
         return -1
-
-
-def load_local_api_settings(host: str) -> tuple[str | None, int]:
-    token = os.getenv("HIKVISION_LOCAL_HTTP_TOKEN")
-    port = int(os.getenv("HIKVISION_LOCAL_HTTP_PORT", "8782"))
-    if token:
-        return token, port
-
-    config_path = Path(os.getenv("HIKVISION_HOMEBRIDGE_CONFIG", "/homebridge/config.json"))
-    try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-        platform = next(
-            item for item in config.get("platforms", [])
-            if item.get("platform") == "HikvisionDoorbell"
-        )
-        cameras = platform.get("cameras") or []
-        camera = next(
-            (item for item in cameras if str(item.get("ip") or item.get("host") or "") == host),
-            cameras[0] if cameras else {},
-        )
-        token = camera.get("localHttpToken") or platform.get("localHttpToken")
-        port = int(camera.get("localHttpPort") or platform.get("localHttpPort") or port)
-    except Exception as error:
-        emit("diagnostic", component="local-http-config", ok=False, error=str(error))
-        return None, port
-
-    return str(token) if token else None, port
-
-
-def forward_motion(token: str | None, port: int, duration_ms: int, command: int) -> None:
-    if not token:
-        emit("motion-forward", ok=False, error="local-http-token-unavailable")
-        return
-
-    body = json.dumps({
-        "source": "hikvision-hcnet-sdk",
-        "durationMs": duration_ms,
-        "alarmCommand": f"0x{command:04x}",
-        "alarmType": MOTION_ALARM_TYPE,
-    }).encode("utf-8")
-    request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/v1/motion?durationMs={duration_ms}",
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=3) as response:
-            response.read(4096)
-            emit("motion-forward", ok=200 <= response.status < 300, status=response.status)
-    except urllib.error.HTTPError as error:
-        emit("motion-forward", ok=False, status=error.code, error="http-error")
-    except Exception as error:
-        emit("motion-forward", ok=False, error=type(error).__name__)
 
 
 def enqueue_event(event: dict[str, Any]) -> None:
@@ -266,7 +206,6 @@ def main() -> int:
         if alarm_handle < 0:
             raise RuntimeError(f"NET_DVR_SetupAlarmChan_{alarm_api} failed error={get_last_error(sdk)}")
 
-        local_token, local_port = load_local_api_settings(args.host)
         emit("state", state="CONNECTED", host=args.host, port=args.port, alarmApi=alarm_api)
         last_doorbell_at = 0.0
         last_motion_at = 0.0
@@ -300,7 +239,6 @@ def main() -> int:
                 if (now - last_motion_at) * 1000 >= max(args.motion_debounce_ms, 0):
                     last_motion_at = now
                     emit("native-motion", source="hikvision-hcnet-sdk", command=f"0x{command:04x}", alarmType=alarm_type)
-                    forward_motion(local_token, local_port, args.motion_hold_ms, command)
 
         emit("state", state="STOPPING")
         return 0
