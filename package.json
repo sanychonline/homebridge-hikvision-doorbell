@@ -1,0 +1,41 @@
+{
+  "name": "homebridge-hikvision-doorbell",
+  "version": "0.1.0",
+  "displayName": "Hikvision Doorbell",
+  "description": "Homebridge video doorbell plugin for Hikvision DS-KB8112-IM with RTSP media, Hik-Connect call events, HomeKit Secure Video, and HCNetSDK talkback.",
+  "main": "src/index.js",
+  "files": [
+    "config.schema.json",
+    "src",
+    "tools/hikvision-hikconnect-call-probe.js",
+    "tools/hikvision-hcnet-alarm.py",
+    "tools/hikvision-hcnet-talkback.py",
+    "README.md"
+  ],
+  "scripts": {
+    "probe:hikvision-events": "python3 tools/hikvision-hcnet-alarm.py",
+    "probe:hikvision-talkback": "python3 tools/hikvision-hcnet-talkback.py",
+    "probe:hikconnect-call": "node tools/hikvision-hikconnect-call-probe.js"
+  },
+  "keywords": [
+    "homebridge-plugin",
+    "hikvision",
+    "hikvision-doorbell",
+    "DS-KB8112-IM",
+    "doorbell",
+    "camera",
+    "homekit-secure-video",
+    "hksv",
+    "rtsp"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "homebridge": "^2.0.0"
+  },
+  "peerDependencies": {
+    "homebridge": ">=1.6.0"
+  }
+}

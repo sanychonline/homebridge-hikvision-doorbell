@@ -1,0 +1,252 @@
+{
+  "pluginAlias": "HikvisionDoorbell",
+  "pluginType": "platform",
+  "singular": true,
+  "customUi": false,
+  "headerDisplay": "Hikvision doorbell plugin for Homebridge: RTSP video/audio, HomeKit Doorbell events, HomeKit Secure Video, and two-way audio through HCNetSDK.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Plugin Name",
+        "type": "string",
+        "default": "Hikvision DS-KB8112IM"
+      },
+      "cameras": {
+        "title": "Cameras",
+        "type": "array",
+        "items": {
+          "title": "Camera",
+          "type": "object",
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string",
+              "required": true
+            },
+            "did": {
+              "title": "Stable Accessory ID",
+              "type": "string",
+              "required": true,
+              "description": "Any stable unique ID for this Homebridge accessory. It is not sent to Hikvision."
+            },
+            "model": {
+              "title": "Model",
+              "type": "string",
+              "default": "DS-KB8112-IM",
+              "description": "Displayed in Apple Home accessory information."
+            },
+            "ip": {
+              "title": "Doorbell IP Address",
+              "type": "string",
+              "placeholder": "192.168.1.50",
+              "description": "Local LAN address of the Hikvision outdoor station."
+            },
+            "username": {
+              "title": "Device Username",
+              "type": "string",
+              "default": "admin",
+              "description": "Hikvision device username used by local integrations."
+            },
+            "password": {
+              "title": "Device Password",
+              "type": "string",
+              "format": "password",
+              "description": "Hikvision device password used by local integrations. Keep this private."
+            },
+            "rtspUrl": {
+              "title": "RTSP URL",
+              "type": "string",
+              "description": "Direct RTSP URL used for HomeKit live video/audio, for example rtsp://user:password@192.168.1.50/Streaming/Channels/101. Keep credentials private."
+            },
+            "rtspTransport": {
+              "title": "RTSP Transport",
+              "type": "string",
+              "default": "tcp",
+              "oneOf": [
+                {
+                  "title": "TCP",
+                  "enum": [
+                    "tcp"
+                  ]
+                },
+                {
+                  "title": "UDP",
+                  "enum": [
+                    "udp"
+                  ]
+                }
+              ]
+            },
+            "doorbellService": {
+              "title": "Doorbell Service",
+              "type": "boolean",
+              "default": true,
+              "description": "Expose this accessory as a real HomeKit Doorbell camera."
+            },
+            "hikConnectDoorbell": {
+              "title": "Hik-Connect Doorbell Events",
+              "type": "boolean",
+              "default": false,
+              "description": "Use the Hik-Connect account credentials below to detect incoming calls from the indoor station and trigger the HomeKit Doorbell notification."
+            },
+            "hikConnectUsername": {
+              "title": "Hik-Connect Username",
+              "type": "string",
+              "description": "Hik-Connect account username used only for doorbell call-state polling."
+            },
+            "hikConnectPassword": {
+              "title": "Hik-Connect Password",
+              "type": "string",
+              "format": "password",
+              "description": "Hik-Connect account password. Stored in Homebridge config like the device password."
+            },
+            "hikConnectBaseUrl": {
+              "title": "Hik-Connect API Base URL",
+              "type": "string",
+              "default": "https://api.hik-connect.com",
+              "description": "Leave default unless your Hik-Connect account is assigned to a different regional API host."
+            },
+            "indoorStationSerial": {
+              "title": "Indoor Station Serial",
+              "type": "string",
+              "description": "Serial number of the indoor panel that receives the doorbell call, for example DS-KH6310-W."
+            },
+            "hikConnectPollIntervalMs": {
+              "title": "Hik-Connect Call Poll Interval (ms)",
+              "type": "integer",
+              "default": 2000,
+              "minimum": 1000,
+              "maximum": 10000,
+              "description": "Calls are deduplicated by state. Startup and recovery after a long interruption establish a baseline without creating a ring event."
+            },
+            "doorbellAnswerOnStreamStart": {
+              "title": "Treat Live View as Doorbell Answer",
+              "type": "boolean",
+              "default": false,
+              "description": "Treat opening the HomeKit live stream shortly after a doorbell ring as answering that call and suppress duplicate rings."
+            },
+            "hikConnectAnswerOnStreamStart": {
+              "title": "Answer Hik-Connect Call on Live View",
+              "type": "boolean",
+              "default": false,
+              "description": "Also send a Hik-Connect CallSignal answer command when HomeKit live view opens after a Hik-Connect ring. Experimental; useful when the indoor panel keeps ringing and blocks talkback."
+            },
+            "doorbellAnswerWindowMs": {
+              "title": "Doorbell Answer Window (ms)",
+              "type": "integer",
+              "default": 90000,
+              "minimum": 1000,
+              "maximum": 300000,
+              "description": "How long after a ring a HomeKit live stream start is treated as answering that doorbell call."
+            },
+            "doorbellSuppressAfterAnswerMs": {
+              "title": "Doorbell Suppress After Answer (ms)",
+              "type": "integer",
+              "default": 60000,
+              "minimum": 1000,
+              "maximum": 300000,
+              "description": "How long to suppress additional doorbell events after the live stream answers the call, unless Hik-Connect reports idle earlier."
+            },
+            "audio": {
+              "title": "Enable Audio",
+              "type": "boolean",
+              "default": true,
+              "description": "Enable Hikvision RTSP microphone audio for Apple Home live view."
+            },
+            "twoWayAudio": {
+              "title": "Two-Way Audio",
+              "type": "boolean",
+              "default": false,
+              "description": "Enable HomeKit Talk. For this Hikvision doorbell use the HCNetSDK transport."
+            },
+            "talkbackTransport": {
+              "title": "Talkback Transport",
+              "type": "string",
+              "default": "none",
+              "enum": [
+                "none",
+                "hcnet-sdk",
+                "command"
+              ],
+              "description": "Speaker transport for HomeKit Talk. Use hcnet-sdk for the Hikvision doorbell."
+            },
+            "hcnetVoiceChannel": {
+              "title": "HCNetSDK Voice Channel",
+              "type": "integer",
+              "default": 1,
+              "minimum": 1
+            },
+            "hcnetSdkLibrary": {
+              "title": "HCNetSDK Library",
+              "type": "string",
+              "default": "/homebridge/hikvision-hcnet-sdk/lib/libhcnetsdk.so",
+              "description": "Path to libhcnetsdk.so on the Homebridge host/container. Keep SDK binaries outside this repository."
+            },
+            "hcnetSdkComponentPath": {
+              "title": "HCNetSDK Component Directory",
+              "type": "string",
+              "default": "/homebridge/hikvision-hcnet-sdk/lib/HCNetSDKCom",
+              "description": "Path to the HCNetSDKCom directory that belongs to the installed HCNetSDK runtime."
+            },
+            "hcnetPort": {
+              "title": "HCNetSDK Device Port",
+              "type": "integer",
+              "default": 8000,
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "hsv": {
+              "title": "HomeKit Secure Video",
+              "type": "boolean",
+              "default": false,
+              "description": "Enable HomeKit Secure Video support for this camera."
+            },
+            "motionSensor": {
+              "title": "Expose Motion Sensor",
+              "type": "boolean",
+              "default": true,
+              "description": "Expose motion events from the doorbell as a HomeKit Motion Sensor."
+            },
+            "nativeEvents": {
+              "title": "Native HCNetSDK Events",
+              "type": "boolean",
+              "default": false,
+              "description": "Subscribe to local HCNetSDK alarm callbacks for supported device events such as motion."
+            },
+            "localHttpApi": {
+              "title": "Local HTTP API",
+              "type": "boolean",
+              "default": false,
+              "description": "Optional private LAN helper API for diagnostics and manual local triggers. Most users can leave this disabled."
+            },
+            "localHttpHost": {
+              "title": "Local HTTP Host",
+              "type": "string",
+              "default": "0.0.0.0"
+            },
+            "localHttpPort": {
+              "title": "Local HTTP Port",
+              "type": "integer",
+              "default": 8781,
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "localHttpToken": {
+              "title": "Local HTTP API Token",
+              "type": "string",
+              "format": "password",
+              "description": "Optional bearer token for local control/stream endpoints. Use Authorization: Bearer <token> or ?token=. Read-only status endpoints never expose this value."
+            },
+            "ffmpeg": {
+              "title": "FFmpeg Path",
+              "type": "string",
+              "default": "ffmpeg",
+              "description": "Optional ffmpeg binary path. Leave empty to use Homebridge ffmpeg."
+            }
+          }
+        }
+      }
+    }
+  }
+}
