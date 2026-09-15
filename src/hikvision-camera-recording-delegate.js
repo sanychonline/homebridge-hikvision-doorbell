@@ -216,6 +216,14 @@ class HikvisionCameraRecordingDelegate {
   startSession(streamId, signal) {
     const ffmpeg = this.config.ffmpeg || "/usr/local/bin/ffmpeg";
     const fragmentLengthMs = Math.max(Number(this.config.hsvFragmentLengthMs || 4000), 1000);
+    const videoCodecConfiguration = this.recordingConfiguration?.videoCodec || {};
+    const videoParameters = videoCodecConfiguration.parameters || {};
+    const resolution = Array.isArray(videoCodecConfiguration.resolution) ? videoCodecConfiguration.resolution : [];
+    const width = Math.max(Number(this.config.hsvEncodeWidth || this.config.hsvWidth || resolution[0] || 1280), 160);
+    const height = Math.max(Number(this.config.hsvEncodeHeight || this.config.hsvHeight || resolution[1] || 720), 120);
+    const fps = Math.max(Number(this.config.hsvFps || resolution[2] || 20), 1);
+    const bitrateKbps = Math.max(Number(this.config.hsvBitrateKbps || videoParameters.bitRate || 1200), 256);
+    const keyframeInterval = Math.max(Math.round(fps * fragmentLengthMs / 1000), 1);
     const audioSampleRate = selectedAudioSampleRate(this.recordingConfiguration);
     const audioBitrateKbps = Math.max(Number(this.config.hsvAudioBitrateKbps || 32), 16);
     const args = [
@@ -224,6 +232,12 @@ class HikvisionCameraRecordingDelegate {
       this.config.hsvFfmpegDebug === true ? "info" : "warning",
       "-rtsp_transport",
       this.config.rtspTransport || "tcp",
+      "-probesize",
+      "1048576",
+      "-analyzeduration",
+      "5000000",
+      "-fflags",
+      "+genpts",
       "-i",
       this.rtspUrl(),
       "-map",
@@ -261,10 +275,22 @@ class HikvisionCameraRecordingDelegate {
         "yuv420p",
         "-profile:v",
         "main",
+        "-r",
+        String(fps),
         "-g",
-        "100",
+        String(keyframeInterval),
+        "-keyint_min",
+        String(keyframeInterval),
+        "-sc_threshold",
+        "0",
         "-bf",
         "0",
+        "-s",
+        `${width}x${height}`,
+        "-b:v",
+        `${bitrateKbps}k`,
+        "-force_key_frames",
+        `expr:gte(t,n_forced*${fragmentLengthMs / 1000})`,
       );
     }
     args.push(
@@ -276,6 +302,10 @@ class HikvisionCameraRecordingDelegate {
       String(fragmentLengthMs * 1000),
       "-min_frag_duration",
       String(fragmentLengthMs * 1000),
+      "-flush_packets",
+      "1",
+      "-avoid_negative_ts",
+      "make_zero",
       "-f",
       "mp4",
       "pipe:1",
@@ -297,6 +327,7 @@ class HikvisionCameraRecordingDelegate {
       abortHandler: null,
       startupTimer: null,
     };
+    this.platform.log.info(`Hikvision HKSV FFmpeg configured for ${this.cameraName()}: ${width}x${height}@${fps}, bitrate=${bitrateKbps}k, keyframeInterval=${keyframeInterval}, videoCodec=${videoCodec}`);
 
     proc.stderr.setEncoding("utf8");
     proc.stderr.on("data", (data) => {
