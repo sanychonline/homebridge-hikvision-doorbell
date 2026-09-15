@@ -249,9 +249,25 @@ class HikvisionCameraRecordingDelegate {
       args.push("-an");
     }
 
+    const videoCodec = this.config.hsvVideoCodec || "libx264";
+    args.push("-c:v", videoCodec);
+    if (videoCodec !== "copy") {
+      args.push(
+        "-preset",
+        String(this.config.hsvVideoPreset || "faster"),
+        "-tune",
+        "zerolatency",
+        "-pix_fmt",
+        "yuv420p",
+        "-profile:v",
+        "main",
+        "-g",
+        "100",
+        "-bf",
+        "0",
+      );
+    }
     args.push(
-      "-c:v",
-      this.config.hsvVideoCodec || "copy",
       "-dn",
       "-sn",
       "-movflags",

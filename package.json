@@ -1,6 +1,6 @@
 {
   "name": "homebridge-hikvision-doorbell",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "displayName": "Hikvision Doorbell",
   "description": "Homebridge video doorbell plugin for Hikvision DS-KB8112-IM with RTSP media, Hik-Connect call events, HomeKit Secure Video, and HCNetSDK talkback.",
   "repository": {
