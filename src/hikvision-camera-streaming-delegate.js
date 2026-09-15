@@ -1299,10 +1299,18 @@ class HikvisionCameraStreamingDelegate {
     const now = Date.now();
     this.ensureSnapshotRefreshTimer(request);
 
-    const rtspUrl = this.rtspStreamUrl();
-    if (rtspUrl && !this.snapshotCache?.buffer) {
+    if (!this.snapshotCache?.buffer) {
       this.scheduleLocalSnapshotRefresh(request);
-      return this.captureStillFrameFromRtspStream(request);
+      try {
+        return await this.captureStillImageFromHikvision(request);
+      } catch (error) {
+        const rtspUrl = this.rtspStreamUrl("technical");
+        if (!rtspUrl) {
+          throw error;
+        }
+        this.platform.log.debug(`Hikvision still image failed, trying technical RTSP channel: ${error.message}`);
+        return this.captureStillFrameFromRtspStream(request, rtspUrl);
+      }
     }
 
     if (this.snapshotCache?.buffer) {
@@ -1359,17 +1367,26 @@ class HikvisionCameraStreamingDelegate {
       return this.snapshotCache?.buffer || placeholderJpeg();
     }
 
-    const rtspUrl = this.rtspStreamUrl();
-    if (rtspUrl) {
-      const buffer = await this.captureStillFrameFromRtspStream(request);
+    try {
+      const buffer = await this.captureStillImageFromHikvision(request);
       this.snapshotCache = {
         buffer,
         createdAt: Date.now(),
       };
       return buffer;
+    } catch (error) {
+      this.platform.log.debug(`Hikvision still image failed, trying technical RTSP channel: ${error.message}`);
+      const rtspUrl = this.rtspStreamUrl("technical");
+      if (rtspUrl) {
+        const buffer = await this.captureStillFrameFromRtspStream(request, rtspUrl);
+        this.snapshotCache = {
+          buffer,
+          createdAt: Date.now(),
+        };
+        return buffer;
+      }
+      throw error;
     }
-
-    throw new Error("RTSP stream is required for snapshots.");
   }
 
   hasRecentMonitoringPackets() {
@@ -1438,9 +1455,76 @@ class HikvisionCameraStreamingDelegate {
     await this.snapshotPacketInFlight;
   }
 
-  captureStillFrameFromRtspStream(request) {
+  captureStillImageFromHikvision(request) {
     return new Promise((resolve, reject) => {
-      const rtspUrl = this.rtspStreamUrl();
+      const ffmpeg = this.config.curl || "curl";
+      const width = request?.width || request?.video?.width || this.config.snapshotWidth || 1280;
+      const height = request?.height || request?.video?.height || this.config.snapshotHeight || 720;
+      const timeoutMs = this.config.snapshotTimeoutMs || 12000;
+      const url = this.hikvisionStillImageUrl();
+      if (!url) {
+        reject(new Error("Hikvision still image URL is unavailable."));
+        return;
+      }
+
+      const args = [
+        "--digest",
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--max-time",
+        String(Math.ceil(timeoutMs / 1000)),
+        "-u",
+        `${this.config.username || "admin"}:${this.config.password || ""}`,
+        "-H",
+        `X-Image-Width: ${width}`,
+        "-H",
+        `X-Image-Height: ${height}`,
+        "-o",
+        "-",
+        url,
+      ];
+      const proc = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"] });
+      const stdout = [];
+      const stderr = [];
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          proc.kill("SIGKILL");
+          reject(new Error("Hikvision still image request timed out."));
+        }
+      }, timeoutMs + 1000);
+
+      proc.stdout.on("data", (chunk) => stdout.push(chunk));
+      proc.stderr.on("data", (chunk) => stderr.push(chunk));
+      proc.on("error", (error) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          reject(error);
+        }
+      });
+      proc.on("exit", (code) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        const buffer = Buffer.concat(stdout);
+        if (code === 0 && buffer.length > 0) {
+          this.platform.log.debug(`Hikvision still image received for ${this.config.name || this.config.did}: bytes=${buffer.length}`);
+          resolve(buffer);
+          return;
+        }
+        const message = Buffer.concat(stderr).toString().trim();
+        reject(new Error(message ? redactLog(message) : `Hikvision still image exited with code ${code}`));
+      });
+    });
+  }
+
+  captureStillFrameFromRtspStream(request, rtspUrl = this.rtspStreamUrl("technical")) {
+    return new Promise((resolve, reject) => {
       if (!rtspUrl) {
         reject(new Error("Configured RTSP stream URL is missing."));
         return;
@@ -1532,8 +1616,19 @@ class HikvisionCameraStreamingDelegate {
     });
   }
 
-  rtspStreamUrl() {
-    const configured = String(this.config.rtspUrl || "").trim();
+  hikvisionStillImageUrl() {
+    const host = this.config.ip || this.config.host || this.config.ipAddress || this.config.address;
+    if (!host) {
+      return null;
+    }
+    const protocol = String(this.config.httpProtocol || (this.config.https ? "https" : "http")).replace(/:$/, "");
+    const port = Number(this.config.httpPort || (protocol === "https" ? 443 : 80));
+    return `${protocol}://${host}:${port}/ISAPI/Streaming/channels/101/picture`;
+  }
+
+  rtspStreamUrl(purpose = "live") {
+    const technical = purpose === "technical";
+    const configured = technical ? "" : String(this.config.rtspUrl || "").trim();
     if (configured) {
       const url = new URL(configured);
       if (!url.username && this.config.username) {
@@ -1550,7 +1645,7 @@ class HikvisionCameraStreamingDelegate {
       return null;
     }
     const port = Number(this.config.rtspPort || 554);
-    const channel = String(this.config.rtspChannel || 101);
+    const channel = String(technical ? 102 : this.config.rtspChannel || 101);
     const streamPath = this.config.rtspPath || `/Streaming/Channels/${channel}`;
     const url = new URL(`rtsp://${host}:${port}${streamPath.startsWith("/") ? streamPath : `/${streamPath}`}`);
     url.username = this.config.username;
