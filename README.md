@@ -2,7 +2,7 @@
 
 Homebridge video doorbell plugin for the Hikvision DS-KB8112-IM outdoor door station.
 
-## Current status: 0.1.8
+## Current status: 0.1.9
 
 The verified local implementation provides:
 
@@ -156,7 +156,7 @@ door station remains the final physical acceptance check.
 
 ## Doorbell button limitation
 
-The physical CALL button is the only unresolved core feature in `0.1.8`. The
+The physical CALL button is the only unresolved core feature in `0.1.9`. The
 reference firmware was tested with local event interfaces, but it did not provide
 a reliable local button event. The plugin therefore does not claim automatic
 Doorbell notifications from a physical button press.

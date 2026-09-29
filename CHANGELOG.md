@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.8 - 2026-09-29
+## 0.1.9 - 2026-09-29
 
 - Document the verified local DS-KB8112-IM feature set.
 - Use channel `101` as the shared source for live view, snapshots, and HSV recording.
@@ -14,4 +14,4 @@
 ## 0.1.7 and earlier
 
 See git history for development changes and experimental protocol work. Those
-experiments are not part of the supported feature claims for `0.1.8`.
+experiments are not part of the supported feature claims for `0.1.9`.
