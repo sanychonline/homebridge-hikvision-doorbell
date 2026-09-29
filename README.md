@@ -2,7 +2,7 @@
 
 Homebridge video doorbell plugin for the Hikvision DS-KB8112-IM outdoor door station.
 
-## Current status: 0.1.9
+## Current status: 0.1.10
 
 The verified local implementation provides:
 
@@ -41,14 +41,14 @@ audio, motion detection, or HSV recording.
 Install the published package in the same environment where Homebridge runs:
 
 ```bash
-npm install -g homebridge-hikvision-doorbell@0.1.9
+npm install -g homebridge-hikvision-doorbell@0.1.10
 ```
 
 For the official Homebridge Docker image, install into the persistent `/homebridge`
 directory and restart the container:
 
 ```bash
-docker exec homebridge npm install --prefix /homebridge --save homebridge-hikvision-doorbell@0.1.9
+docker exec homebridge npm install --prefix /homebridge --save homebridge-hikvision-doorbell@0.1.10
 docker restart homebridge
 ```
 
@@ -156,7 +156,7 @@ door station remains the final physical acceptance check.
 
 ## Doorbell button limitation
 
-The physical CALL button is the only unresolved core feature in `0.1.9`. The
+The physical CALL button is the only unresolved core feature in `0.1.10`. The
 reference firmware was tested with local event interfaces, but it did not provide
 a reliable local button event. The plugin therefore does not claim automatic
 Doorbell notifications from a physical button press.
