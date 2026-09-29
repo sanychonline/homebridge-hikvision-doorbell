@@ -1,8 +1,8 @@
 {
   "name": "homebridge-hikvision-doorbell",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "displayName": "Hikvision Doorbell",
-  "description": "Homebridge video doorbell plugin for Hikvision DS-KB8112-IM with RTSP media, Hik-Connect call events, HomeKit Secure Video, and HCNetSDK talkback.",
+  "description": "Homebridge video doorbell plugin for Hikvision DS-KB8112-IM with local RTSP video/audio, SDK-free talkback, motion-triggered HomeKit Secure Video, and a native HomeKit Doorbell service.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sanychonline/homebridge-hikvision-doorbell.git"
@@ -15,15 +15,17 @@
   "files": [
     "config.schema.json",
     "src",
-    "tools/hikvision-hikconnect-call-probe.js",
-    "tools/hikvision-hcnet-alarm.py",
-    "tools/hikvision-hcnet-talkback.py",
-    "README.md"
+    "tools/hikvision-private-login-probe.js",
+    "tools/hikvision-private-audio-start-probe.js",
+    "tools/hikvision-private-voice-media-probe.js",
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
-    "probe:hikvision-events": "python3 tools/hikvision-hcnet-alarm.py",
-    "probe:hikvision-talkback": "python3 tools/hikvision-hcnet-talkback.py",
-    "probe:hikconnect-call": "node tools/hikvision-hikconnect-call-probe.js"
+    "prepack": "node tools/check-no-sdk-binaries.js",
+    "probe:hikvision-private-login": "node tools/hikvision-private-login-probe.js",
+    "probe:hikvision-private-audio-start": "node tools/hikvision-private-audio-start-probe.js",
+    "probe:hikvision-private-voice-media": "node tools/hikvision-private-voice-media-probe.js"
   },
   "keywords": [
     "homebridge-plugin",

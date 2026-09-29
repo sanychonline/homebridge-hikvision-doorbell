@@ -6,16 +6,15 @@ const { CameraStateMachine } = require("./camera-state-machine");
 const { CameraMetrics } = require("./camera-metrics");
 const { HomeKitTalkback } = require("./homekit-talkback");
 const { LocalHttpApi } = require("./local-http-api");
-const { HikvisionNativeEventListener } = require("./hikvision-native-event-listener");
-const { HikvisionHikConnectCallListener } = require("./hikvision-hikconnect-call-listener");
+const { HikvisionIsapiEventListener } = require("./hikvision-isapi-event-listener");
+const { HikvisionIsapiClient } = require("./hikvision-isapi-client");
+const { HKSV_PREBUFFER_LENGTH_MS } = require("./hksv-recording-constants");
 
 class HikvisionCameraAccessory {
   constructor(platform, accessory, config) {
     this.platform = platform;
     this.accessory = accessory;
     this.config = config;
-    this.doorbellCallSession = null;
-    this.doorbellSuppressUntil = 0;
 
     const { Service, Characteristic } = platform.api.hap;
 
@@ -34,12 +33,18 @@ class HikvisionCameraAccessory {
     this.stateMachine = new CameraStateMachine(platform, config, this.metrics);
     this.talkback = new HomeKitTalkback(platform, config, this.metrics, this.stateMachine);
     this.streamingDelegate = new HikvisionCameraStreamingDelegate(platform, null, config, this.metrics, this.stateMachine, this.talkback);
-    this.streamingDelegate.setLiveStreamSink((event) => this.handleLiveStreamStarted(event));
     this.recordingDelegate = config.hsv === true
       ? new HikvisionCameraRecordingDelegate(platform, config, this.streamingDelegate, this.metrics, this.stateMachine)
       : null;
 
     this.doorbellService = this.configureDoorbellService(Service, Characteristic);
+
+    this.motionService = null;
+    if (this.recordingDelegate) {
+      this.motionService = accessory.getServiceById(Service.MotionSensor, "motion")
+        || accessory.addService(Service.MotionSensor, `${config.name || "Camera"} Motion`, "motion");
+      this.motionService.setHiddenService(true);
+    }
 
     const controllerOptions = {
       cameraStreamCount: normalizedMaxStreams(config.maxStreams),
@@ -48,12 +53,11 @@ class HikvisionCameraAccessory {
     };
 
     if (this.recordingDelegate) {
+      platform.log.info(`HKSV recording options for ${config.name || config.did}: channel=${config.hsvRtspChannel || config.hksvRtspChannel || 101}, audio=${hksvAudioEnabled(config)}, prebufferMs=${hksvPrebufferLengthMs(config)}, fragmentMs=${Number(config.hsvFragmentLengthMs || 4000)}`);
+      controllerOptions.sensors = { motion: this.motionService };
       controllerOptions.recording = {
         options: recordingOptions(platform.api.hap, config),
         delegate: this.recordingDelegate,
-      };
-      controllerOptions.sensors = {
-        motion: true,
       };
     }
 
@@ -67,15 +71,30 @@ class HikvisionCameraAccessory {
 
     accessory.configureController(this.controller);
 
-    this.motionService = this.configureMotionSensor(Service, Characteristic);
+    if (this.recordingDelegate) {
+      this.recordingDelegate.setRecordingManagement(this.controller.recordingManagement);
+    }
+
+    const triggerSwitch = accessory.getServiceById?.(Service.Switch, "hsv-trigger");
+    if (triggerSwitch) accessory.removeService(triggerSwitch);
 
     if (this.recordingDelegate) {
       platform.log.info(`HomeKit Secure Video enabled for ${config.name || config.did}`);
-      this.recordingDelegate.setMotionService(this.controller.motionService);
-      this.configureHsvTriggerSwitch(Service, Characteristic);
+      this.recordingDelegate.setMotionService(this.motionService);
       setTimeout(() => this.recordingDelegate.logReadiness(), Number(config.hsvReadinessLogDelayMs || 30000)).unref?.();
     }
     this.streamingDelegate.setMotionSink((event) => this.handleMotionEvent(event, Characteristic));
+    this.streamingDelegate.startMotionAnalysis();
+
+    this.isapiEventListener = new HikvisionIsapiEventListener(platform, config, {
+      onMotion: (event) => this.handleMotionEvent(event, Characteristic),
+    });
+    this.configureDeviceMotionDetectionArea();
+    if (supportsStableIsapiAlertStream(config)) {
+      this.isapiEventListener.start();
+    } else {
+      platform.log.info(`isapi.events.disabled camera=${config.name || config.did || "unknown"} reason=unsupported-door-station-alert-stream`);
+    }
 
     this.localHttpApi = new LocalHttpApi(
       platform,
@@ -92,19 +111,10 @@ class HikvisionCameraAccessory {
     );
     this.localHttpApi.start();
 
-    this.nativeEventListener = new HikvisionNativeEventListener(platform, config, {
-      onDoorbell: (event) => this.triggerDoorbellEvent(event),
-      onMotion: (event) => this.handleMotionEvent(event, Characteristic),
-    });
-    this.nativeEventListener.start();
-    this.hikConnectCallListener = new HikvisionHikConnectCallListener(platform, config, {
-      onDoorbell: (event) => this.triggerDoorbellEvent(event),
-      onCallState: (event) => this.handleDoorbellCallState(event),
-    });
-    this.hikConnectCallListener.start();
     platform.api.on("shutdown", () => {
-      this.nativeEventListener.stop();
-      this.hikConnectCallListener.stop();
+      this.streamingDelegate.stopMotionAnalysis();
+      this.streamingDelegate.stopSharedMainInput("homebridge-shutdown");
+      this.isapiEventListener.stop();
     });
   }
 
@@ -129,26 +139,9 @@ class HikvisionCameraAccessory {
           setTimeout(() => service.updateCharacteristic(Characteristic.On, false), 100).unref?.();
           return;
         }
-        this.recordingDelegate.triggerRecordingEvent(this.controller.motionService, this.config.hsvMotionDurationMs);
+        this.recordingDelegate.triggerRecordingEvent(null, this.config.hsvMotionDurationMs);
         setTimeout(() => service.updateCharacteristic(Characteristic.On, false), 500).unref?.();
       });
-  }
-
-  configureMotionSensor(Service, Characteristic) {
-    if (this.config.motionSensor === false) {
-      const motionService = this.accessory.getServiceById?.(Service.MotionSensor, "motion");
-      if (motionService && !this.controller?.motionService) {
-        this.accessory.removeService(motionService);
-      }
-      return this.controller?.motionService || null;
-    }
-
-    const motionService = this.controller?.motionService
-      || this.accessory.getServiceById?.(Service.MotionSensor, "motion")
-      || this.accessory.addService(Service.MotionSensor, `${this.config.name || "Hikvision Camera"} Motion`, "motion");
-
-    motionService.updateCharacteristic(Characteristic.MotionDetected, false);
-    return motionService;
   }
 
   configureDoorbellService(Service, Characteristic) {
@@ -169,19 +162,31 @@ class HikvisionCameraAccessory {
   handleMotionEvent(event, Characteristic) {
     const durationMs = Math.max(Number(event?.durationMs || this.config.motionHoldMs || this.config.hsvMotionDurationMs || 15000), 1000);
     this.metrics?.increment("homekit_motion_events_total");
+    if (event?.motionActive === false) {
+      clearTimeout(this.motionClearTimer);
+      this.stateMachine?.motionCleared("device-motion-inactive");
+      this.platform.log.info(`motion.cleared camera=${this.config.name || this.config.did} source=${event?.source || "unknown"}`);
+      if (this.recordingDelegate) {
+        this.recordingDelegate.clearMotionEvent(event);
+      }
+      return {
+        ok: true,
+        source: event?.source || "unknown",
+        durationMs: 0,
+        hasMotionService: Boolean(this.motionService),
+        hksvForwarded: Boolean(this.recordingDelegate),
+      };
+    }
+
     this.platform.log.info(`motion.detected camera=${this.config.name || this.config.did} source=${event?.source || "unknown"} durationMs=${durationMs}`);
     this.stateMachine?.motionDetected(durationMs, `motion:${event?.source || "unknown"}`, event);
 
-    if (this.motionService) {
-      this.motionService.updateCharacteristic(Characteristic.MotionDetected, true);
-      clearTimeout(this.motionClearTimer);
-      this.motionClearTimer = setTimeout(() => {
-        this.motionService?.updateCharacteristic(Characteristic.MotionDetected, false);
-        this.stateMachine?.motionCleared("homekit-motion-clear");
-        this.platform.log.info(`motion.cleared camera=${this.config.name || this.config.did}`);
-      }, durationMs);
-      this.motionClearTimer.unref?.();
-    }
+    clearTimeout(this.motionClearTimer);
+    this.motionClearTimer = setTimeout(() => {
+      this.stateMachine?.motionCleared("device-motion-clear");
+      this.platform.log.info(`motion.cleared camera=${this.config.name || this.config.did}`);
+    }, durationMs);
+    this.motionClearTimer.unref?.();
 
     if (this.recordingDelegate) {
       this.recordingDelegate.triggerMotionEvent(event);
@@ -205,17 +210,15 @@ class HikvisionCameraAccessory {
     }
 
     const { Characteristic } = this.platform.api.hap;
-    if (this.shouldSuppressDoorbellEvent()) {
-      this.platform.log.info(`doorbell.suppressed camera=${this.config.name || this.config.did} source=${event?.source || "unknown"} reason=${event?.reason || "local-event"} callState=${this.doorbellCallSession?.state || "unknown"}`);
-      return {
-        ok: true,
-        suppressed: true,
-        source: event?.source || "unknown",
-        reason: event?.reason || "local-event",
-      };
+    if (this.recordingDelegate && this.config.doorbellTriggersHsv !== false) {
+      this.recordingDelegate.triggerMotionEvent({
+        source: event?.source || "doorbell",
+        reason: "doorbell-ring",
+        durationMs: Number(this.config.doorbellHsvDurationMs || this.config.hsvMotionDurationMs || 60000),
+        force: true,
+      });
     }
 
-    this.markDoorbellRinging(event);
     if (typeof this.controller?.ringDoorbell === "function") {
       this.controller.ringDoorbell();
     } else {
@@ -234,73 +237,64 @@ class HikvisionCameraAccessory {
     };
   }
 
-  shouldSuppressDoorbellEvent() {
-    return this.config.doorbellAnswerOnStreamStart === true && Date.now() < this.doorbellSuppressUntil;
-  }
-
-  markDoorbellRinging(event = {}) {
-    this.doorbellCallSession = {
-      state: "ringing",
-      source: event?.source || "unknown",
-      reason: event?.reason || "local-event",
-      callingId: event?.callingId || event?.call?.callingId || null,
-      call: event?.call || null,
-      ringingAt: Date.now(),
-      answeredAt: null,
-    };
-  }
-
-  handleDoorbellCallState(event = {}) {
-    if (event.status === "ringing" && this.doorbellCallSession) {
-      this.doorbellCallSession.callingId = event?.callingId || event?.call?.callingId || this.doorbellCallSession.callingId;
-      this.doorbellCallSession.call = event?.call || this.doorbellCallSession.call;
+  configureDeviceMotionDetectionArea() {
+    if (this.config.configureMotionDetectionArea === false || !this.config.ip) {
       return;
     }
-    if (event.status === "call-in-progress" && this.doorbellCallSession) {
-      this.doorbellCallSession.state = "answered";
-      this.doorbellCallSession.callingId = event?.callingId || event?.call?.callingId || this.doorbellCallSession.callingId;
-      this.doorbellCallSession.call = event?.call || this.doorbellCallSession.call;
-      return;
-    }
-    if (event.status !== "idle") {
-      return;
-    }
-    if (this.doorbellCallSession) {
-      this.platform.log.info(`doorbell.call.idle camera=${this.config.name || this.config.did} previousState=${this.doorbellCallSession.state}`);
-    }
-    this.doorbellCallSession = null;
-    this.doorbellSuppressUntil = 0;
-  }
-
-  handleLiveStreamStarted(event = {}) {
-    if (this.config.doorbellAnswerOnStreamStart !== true) {
-      return;
-    }
-    const call = this.doorbellCallSession;
-    const answerWindowMs = Math.max(Number(this.config.doorbellAnswerWindowMs ?? 90000), 1000);
-    if (!call || call.state !== "ringing" || Date.now() - call.ringingAt > answerWindowMs) {
+    const model = String(this.config.model || "").trim().toLowerCase();
+    if (model.includes("ds-kb8112-im")) {
       return;
     }
 
-    const suppressMs = Math.max(Number(this.config.doorbellSuppressAfterAnswerMs ?? 60000), 1000);
-    call.state = "answered";
-    call.answeredAt = Date.now();
-    call.streamSessionID = event.sessionID;
-    this.doorbellSuppressUntil = call.answeredAt + suppressMs;
-    this.platform.log.info(`doorbell.call.answered camera=${this.config.name || this.config.did} session=${event.sessionID} source=${call.source} suppressMs=${suppressMs}`);
-    if (this.config.hikConnectAnswerOnStreamStart === true && this.hikConnectCallListener) {
-      this.hikConnectCallListener.answerCurrentCall(call).catch((error) => {
-        this.platform.log.warn(`hikconnect.call-signal camera=${this.config.name || this.config.did} action=answer error=${safeHikConnectAnswerError(error)}`);
+    const delayMs = Math.max(Number(this.config.motionDetectionAreaApplyDelayMs ?? 15000), 1000);
+    setTimeout(() => {
+      this.applyFullFrameMotionDetectionArea().catch((error) => {
+        this.platform.log.warn(`hikvision.motion-area.failed camera=${this.config.name || this.config.did} error=${safeDeviceConfigError(error)}`);
       });
+    }, delayMs).unref?.();
+  }
+
+  async applyFullFrameMotionDetectionArea() {
+    const client = new HikvisionIsapiClient(this.config);
+    const channel = String(this.config.motionDetectionChannel || 1);
+    const path = `/ISAPI/System/Video/inputs/channels/${channel}/motionDetection`;
+    const current = await client.get(path);
+    const updated = enableFullFrameMotionDetection(current);
+    if (!updated || updated === current) {
+      this.platform.log.warn(`hikvision.motion-area.unsupported camera=${this.config.name || this.config.did} reason=no-grid-map`);
+      return;
     }
+    await client.put(path, updated);
+    this.platform.log.info(`hikvision.motion-area.applied camera=${this.config.name || this.config.did} channel=${channel} area=full-frame`);
   }
 
 }
 
-function safeHikConnectAnswerError(error) {
-  const message = String(error?.message || "");
-  return /^(hikconnect|missing-hikconnect|invalid-hikconnect|set-explicit)-[a-z0-9-]+$/.test(message)
-    ? message : "hikconnect-call-signal-error";
+function supportsStableIsapiAlertStream(config = {}) {
+  const model = String(config.model || "").trim().toLowerCase();
+  return !model.includes("ds-kb8112-im");
+}
+
+function safeDeviceConfigError(error) {
+  return String(error?.message || "unknown").replace(/(password|token|authorization)=?[^ ]*/gi, "$1=[redacted]");
+}
+
+function enableFullFrameMotionDetection(xml) {
+  if (!/<gridMap\b/i.test(xml)) {
+    return null;
+  }
+
+  let updated = xml;
+  if (/<enabled\b[^>]*>[\s\S]*?<\/enabled>/i.test(updated)) {
+    updated = updated.replace(/<enabled\b([^>]*)>[\s\S]*?<\/enabled>/i, "<enabled$1>true</enabled>");
+  }
+
+  updated = updated.replace(/<gridMap\b([^>]*)>([\s\S]*?)<\/gridMap>/i, (_match, attrs, value) => {
+    const fullFrame = String(value).replace(/[0-9a-f]/gi, (char) => (/\s/.test(char) ? char : "f"));
+    return `<gridMap${attrs}>${fullFrame}</gridMap>`;
+  });
+
+  return updated;
 }
 
 function normalizedMaxStreams(value) {
@@ -317,14 +311,9 @@ function recordingOptions(hap, config) {
   const resolutions = config.hsvAdvertiseLowResolutionOnly === true
     ? lowResolutionRecordingResolutions(fps)
     : cameraUiRecordingResolutions(fps);
-  const prebufferLength = Math.max(
-    Number(config.hsvPrebufferLengthMs || 0)
-      || Number(config.prebufferLength || 0) * 1000
-      || 4000,
-    4000,
-  );
+  const prebufferLength = hksvPrebufferLengthMs(config);
 
-  return {
+  const options = {
     overrideEventTriggerOptions: [
       hap.EventTriggerOption.MOTION,
       hap.EventTriggerOption.DOORBELL,
@@ -352,19 +341,32 @@ function recordingOptions(hap, config) {
       },
       resolutions,
     },
-    audio: {
+  };
+
+  if (hksvAudioEnabled(config)) {
+    options.audio = {
       codecs: [
         {
           type: hap.AudioRecordingCodecType.AAC_LC,
-          bitrateMode: 0,
+          bitrateMode: hap.AudioBitrate.VARIABLE,
           samplerate: [
             hap.AudioRecordingSamplerate.KHZ_32,
           ],
           audioChannels: 1,
         },
       ],
-    },
-  };
+    };
+  }
+
+  return options;
+}
+
+function hksvAudioEnabled(config) {
+  return config.hsvAudio !== false && config.hksvAudio !== false;
+}
+
+function hksvPrebufferLengthMs(config) {
+  return HKSV_PREBUFFER_LENGTH_MS;
 }
 
 function cameraUiRecordingResolutions(fps) {

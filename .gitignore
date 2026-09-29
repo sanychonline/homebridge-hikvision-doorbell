@@ -32,5 +32,21 @@ last-hsv-video.h264
 .env.*
 hikvision-ds8112im.local.json
 hikconnect-service.json
+private-login.json
+private-audio-start.json
+private-voice-media.json
+private-login-material.json
+*.private-login.json
+*.private-audio-start.json
+*.private-voice-media.json
+*.private-material.json
 
 *.tgz
+
+# Research and packet-capture material
+tools/research/
+research/
+captures/
+*.pcap
+*.pcapng
+*.log

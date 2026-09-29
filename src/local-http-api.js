@@ -99,11 +99,17 @@ class LocalHttpApi {
     }
 
     if (url.pathname === "/api/v1/status") {
+      if (!this.authorizeSensitiveRead(request, url, response)) {
+        return;
+      }
       this.writeJson(response, 200, this.statusPayload());
       return;
     }
 
     if (url.pathname === "/api/v1/metrics") {
+      if (!this.authorizeSensitiveRead(request, url, response)) {
+        return;
+      }
       this.writeJson(response, 200, {
         ok: true,
         camera: this.safeCameraInfo(),
@@ -113,6 +119,9 @@ class LocalHttpApi {
     }
 
     if (url.pathname === "/metrics") {
+      if (!this.authorizeSensitiveRead(request, url, response)) {
+        return;
+      }
       const body = Buffer.from(this.metrics?.prometheus?.() || "");
       response.writeHead(200, {
         "content-type": "text/plain; version=0.0.4; charset=utf-8",
@@ -199,6 +208,21 @@ class LocalHttpApi {
       error: "unauthorized",
     });
     return false;
+  }
+
+  authorizeSensitiveRead(request, url, response) {
+    if (isLoopbackHost(this.config.localHttpHost || "0.0.0.0")) {
+      return true;
+    }
+    if (!hasLocalHttpToken(this.config)) {
+      this.writeJson(response, 403, {
+        ok: false,
+        error: "local-http-token-required",
+        detail: "Status and metrics endpoints require localHttpToken when localHttpHost is not loopback.",
+      });
+      return false;
+    }
+    return this.authorize(request, url, response);
   }
 
   handleMotionTrigger(url, response) {
@@ -412,13 +436,13 @@ class LocalHttpApi {
       });
     }
 
-    if (this.config.motionDetection === true && !streaming.motionDetector?.hasMotionSink) {
+    if (this.config.packetActivityMotionDetection === true && !streaming.motionDetector?.hasMotionSink) {
       checks.push({
         name: "motion-detector-sink",
         ok: false,
         detail: "Motion detection is enabled but no HomeKit/local motion sink is attached.",
       });
-    } else if (this.config.motionDetection === true) {
+    } else if (this.config.packetActivityMotionDetection === true) {
       checks.push({
         name: "motion-detector-sink",
         ok: true,

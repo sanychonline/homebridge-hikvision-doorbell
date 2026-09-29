@@ -5,7 +5,9 @@ const { preconnectRtsp } = require("./hikvision-rtsp-preconnect");
 const { spawn } = require("child_process");
 const { CircularPacketBuffer } = require("./circular-packet-buffer");
 const { PacketActivityMotionDetector } = require("./packet-activity-motion-detector");
+const { HikvisionSubstreamMotionAnalyzer } = require("./hikvision-substream-motion-analyzer");
 const { diagnosticLog } = require("./diagnostic-log");
+const { HikvisionSharedRtspRelay } = require("./hikvision-shared-rtsp-relay");
 
 class HikvisionCameraStreamingDelegate {
   constructor(platform, cloud, config, metrics, stateMachine, talkback) {
@@ -19,6 +21,13 @@ class HikvisionCameraStreamingDelegate {
     this.snapshotCache = null;
     this.snapshotInFlight = null;
     this.snapshotRefreshTimer = null;
+    this.nextSnapshotRefreshAllowedAt = 0;
+    this.lastSnapshotWarningAt = 0;
+    this.lastSnapshotErrorMessage = null;
+    this.lastSnapshotSoftErrorAt = 0;
+    this.lastSnapshotSuccessAt = 0;
+    this.lastSnapshotBytes = 0;
+    this.lastSnapshotFailureAt = 0;
     this.liveStreamStarting = 0;
     this.sharedReaders = new Map();
     this.sharedReader = null;
@@ -38,7 +47,20 @@ class HikvisionCameraStreamingDelegate {
     this.videoPrebuffers = new Map();
     this.packetObservers = new Set();
     this.motionDetector = new PacketActivityMotionDetector(platform, config, metrics);
+    this.motionSink = null;
+    this.motionAnalyzer = new HikvisionSubstreamMotionAnalyzer(
+      platform,
+      config,
+      metrics,
+      () => this.rtspStreamUrl("technical"),
+      (event) => this.motionSink?.(event),
+    );
     this.liveStreamSink = null;
+    this.sharedRtspRelay = new HikvisionSharedRtspRelay(
+      platform,
+      config,
+      () => this.rtspStreamUrl("live"),
+    );
   }
 
   setLiveStreamSink(sink) {
@@ -200,13 +222,13 @@ class HikvisionCameraStreamingDelegate {
     this.liveStreamStarting += 1;
     try {
       const streamPurpose = this.livePurposeForRequest(request);
-      const rtspUrl = this.rtspStreamUrl();
-
-      if (rtspUrl) {
-        this.platform.log.info(`Using configured RTSP stream for ${this.config.name || this.config.did}: ${redactStreamUrl(rtspUrl)}`);
+      if (this.rtspStreamUrl()) {
+        const sharedInput = this.sharedRtspRelay.createConsumer(`live:${request.sessionID}`);
+        session.sharedInput = sharedInput;
+        this.platform.log.info(`Using shared Hikvision RTSP upstream for ${this.config.name || this.config.did}: channel=101`);
         this.metrics?.recordLiveStreamStarted(streamPurpose);
         this.stateMachine?.liveStarted(`homekit-live:${streamPurpose}`);
-        session.process = this.spawnFfmpegFromRtspStream(request, session, rtspUrl, streamPurpose);
+        session.process = this.spawnFfmpegFromRtspStream(request, session, null, streamPurpose, sharedInput);
         try {
           this.talkback?.startStream?.(request);
           this.notifyLiveStreamStarted(request, streamPurpose);
@@ -514,9 +536,6 @@ class HikvisionCameraStreamingDelegate {
           }
           const minStartupPackets = this.config.videoStartupPacketCount || 3;
           if (!hasH264DecodableFrame(videoStartupPackets) || videoStartupPackets.length < minStartupPackets) {
-            this.feedSnapshotFromPacket(packet, request).catch((error) => {
-              this.platform.log.debug(`Could not update local Hikvision snapshot from live packet: ${error.message}`);
-            });
             return;
           }
           videoPipePrimed = true;
@@ -540,9 +559,6 @@ class HikvisionCameraStreamingDelegate {
           diagnosticLog(this.config, `first-video session=${request.sessionID} codec=${packet.codec} bytes=${packet.payload.length} primed=${videoPipePrimed}`);
           this.platform.log.info(`Native Hikvision MISS first video for ${this.config.name || this.config.did}: session=${request.sessionID}, codec=${packet.codec}, primed=${videoPipePrimed}`);
         }
-        this.feedSnapshotFromPacket(packet, request).catch((error) => {
-          this.platform.log.debug(`Could not update local Hikvision snapshot from live packet: ${error.message}`);
-        });
         return;
       }
       if (packet.codec === "pcma") {
@@ -602,7 +618,7 @@ class HikvisionCameraStreamingDelegate {
     return proc;
   }
 
-  spawnFfmpegFromRtspStream(request, session, rtspUrl, streamPurpose = "live") {
+  spawnFfmpegFromRtspStream(request, session, rtspUrl, streamPurpose = "live", sharedInput = null) {
     const ffmpeg = this.config.ffmpeg || "ffmpeg";
     const video = request.video;
     const targetSize = liveVideoTargetSize(this.config, video);
@@ -620,8 +636,8 @@ class HikvisionCameraStreamingDelegate {
     const audioFilter = this.config.liveAudioFilter || this.config.audioFilter || defaultAudioFilter(rtspAudioSampleRate, homeKitAudioSampleRate, this.config);
 
     this.platform.log.info(`Starting RTSP stream attempt for ${this.config.name || this.config.did}`);
-    diagnosticLog(this.config, `stream-start source=rtsp session=${request.sessionID} target=${session.address}:${session.videoPort} audioPort=${session.audioPort || "none"} includeAudio=${Boolean(session.audioPort && this.config.audio !== false)} transport=${this.config.rtspTransport || "tcp"} purpose=${streamPurpose}`);
-    this.platform.log.info(`RTSP HomeKit ffmpeg session ${request.sessionID}: videoTarget=${session.address}:${session.videoPort}, audioTarget=${session.audioPort ? `${session.address}:${session.audioPort}` : "none"}, includeAudio=${includeAudio}, videoCodec=${videoCodec}, size=${width}x${height}, requested=${video.width || "?"}x${video.height || "?"}, bitrate=${bitrate}k, source=${redactStreamUrl(rtspUrl)}`);
+    diagnosticLog(this.config, `stream-start source=${sharedInput ? "shared-rtsp" : "rtsp"} session=${request.sessionID} target=${session.address}:${session.videoPort} audioPort=${session.audioPort || "none"} includeAudio=${Boolean(session.audioPort && this.config.audio !== false)} transport=${this.config.rtspTransport || "tcp"} purpose=${streamPurpose}`);
+    this.platform.log.info(`RTSP HomeKit ffmpeg session ${request.sessionID}: videoTarget=${session.address}:${session.videoPort}, audioTarget=${session.audioPort ? `${session.address}:${session.audioPort}` : "none"}, includeAudio=${includeAudio}, videoCodec=${videoCodec}, size=${width}x${height}, requested=${video.width || "?"}x${video.height || "?"}, source=${sharedInput ? "shared-upstream" : redactStreamUrl(rtspUrl)}`);
 
     const rtspTransport = String(this.config.rtspTransport || "tcp").toLowerCase() === "udp" ? "udp" : "tcp";
     const rtspTimeoutMs = Math.max(Number(this.config.rtspInputTimeoutMs || 12000), 1000);
@@ -631,19 +647,14 @@ class HikvisionCameraStreamingDelegate {
       "-loglevel",
       this.config.ffmpegDebug ? "info" : "warning",
       "-fflags",
-      "nobuffer",
+      "+discardcorrupt+nobuffer+genpts",
       "-flags",
       "low_delay",
       "-use_wallclock_as_timestamps",
       "1",
-      "-probesize",
-      videoCodec === "copy" ? "2048" : "32",
-      "-analyzeduration",
-      "0",
-      "-rtsp_transport",
-      rtspTransport,
+      ...(sharedInput ? [] : ["-rtsp_flags", "prefer_tcp", "-probesize", videoCodec === "copy" ? "1048576" : "262144", "-analyzeduration", videoCodec === "copy" ? "5000000" : "1000000", "-rtsp_transport", rtspTransport]),
       "-i",
-      rtspUrl,
+      sharedInput ? "pipe:0" : rtspUrl,
     ];
 
     args.push(
@@ -775,7 +786,11 @@ class HikvisionCameraStreamingDelegate {
       );
     }
 
-    const proc = spawn(ffmpeg, args, { stdio: ["ignore", "ignore", "pipe"] });
+    const proc = spawn(ffmpeg, args, { stdio: [sharedInput ? "pipe" : "ignore", "ignore", "pipe"] });
+    if (sharedInput) {
+      sharedInput.pipe(proc.stdin);
+      proc.once("exit", () => sharedInput.destroy());
+    }
     const ffmpegStderr = [];
 
     proc.on("error", (error) => {
@@ -827,7 +842,16 @@ class HikvisionCameraStreamingDelegate {
   }
 
   setMotionSink(motionSink) {
+    this.motionSink = typeof motionSink === "function" ? motionSink : null;
     this.motionDetector.setMotionSink(motionSink);
+  }
+
+  startMotionAnalysis() {
+    this.motionAnalyzer.start();
+  }
+
+  stopMotionAnalysis() {
+    this.motionAnalyzer.stop();
   }
 
   observeMonitoringPacket(packet, context = {}) {
@@ -845,9 +869,6 @@ class HikvisionCameraStreamingDelegate {
       videoQuality: context.quality || this.videoQualityForPurpose("monitoring"),
     });
     this.motionDetector.observePacket(packet);
-    this.feedSnapshotFromPacket(packet).catch((error) => {
-      this.platform.log.debug(`Could not update local Hikvision snapshot from monitoring packet: ${error.message}`);
-    });
   }
 
   observePrebufferPacket(packet, context = {}) {
@@ -888,6 +909,10 @@ class HikvisionCameraStreamingDelegate {
 
   async acquireSharedReader() {
     throw new Error("RTSP stream is required; native reader fallback has been removed.");
+  }
+
+  createSharedMainInput(label) {
+    return this.sharedRtspRelay.createConsumer(label);
   }
 
   releaseSharedReader(reader) {
@@ -1034,6 +1059,10 @@ class HikvisionCameraStreamingDelegate {
     this.clearStreamWatchdog(sessionId);
   }
 
+  stopSharedMainInput(reason = "shutdown") {
+    this.sharedRtspRelay.stop(reason);
+  }
+
   bumpStreamWatchdog(sessionId, reason) {
     const timeoutMs = Number(this.config.streamMaxDurationMs ?? 180000);
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
@@ -1100,7 +1129,13 @@ class HikvisionCameraStreamingDelegate {
   activeStreamCount(excludingSessionId) {
     let count = 0;
     for (const [sessionId, session] of this.sessions.entries()) {
-      if (sessionId !== excludingSessionId && session.process) {
+      if (
+        sessionId !== excludingSessionId
+        && session.process
+        && !session.process.killed
+        && session.process.exitCode === null
+        && session.process.signalCode === null
+      ) {
         count += 1;
       }
     }
@@ -1260,6 +1295,14 @@ class HikvisionCameraStreamingDelegate {
       snapshot: {
         cached: Boolean(this.snapshotCache?.buffer),
         ageMs: this.snapshotCache?.createdAt ? Date.now() - this.snapshotCache.createdAt : null,
+        lastSuccessAt: this.lastSnapshotSuccessAt || null,
+        lastSuccessAgeMs: this.lastSnapshotSuccessAt ? Date.now() - this.lastSnapshotSuccessAt : null,
+        lastBytes: this.lastSnapshotBytes || 0,
+        lastFailureAt: this.lastSnapshotFailureAt || null,
+        lastFailureAgeMs: this.lastSnapshotFailureAt ? Date.now() - this.lastSnapshotFailureAt : null,
+        lastError: this.lastSnapshotErrorMessage,
+        cooldownUntil: this.nextSnapshotRefreshAllowedAt || null,
+        cooldownRemainingMs: this.nextSnapshotRefreshAllowedAt ? Math.max(0, this.nextSnapshotRefreshAllowedAt - Date.now()) : 0,
         inFlight: Boolean(this.snapshotInFlight),
         backgroundRefresh: this.config.snapshotBackgroundRefresh !== false,
         monitoringPacketAgeMs: this.lastMonitoringPacketAt ? Date.now() - this.lastMonitoringPacketAt : null,
@@ -1267,6 +1310,7 @@ class HikvisionCameraStreamingDelegate {
       prebuffer: this.videoPrebufferStats(),
       prebufferReadiness: this.videoPrebufferReadiness(),
       motionDetector: this.motionDetector.getStatusSnapshot(),
+      motionAnalyzer: this.motionAnalyzer.getStatusSnapshot(),
       profiles: {
         main: this.videoQualityForPurpose("live"),
         sub: this.videoQualityForPurpose("live-sub"),
@@ -1296,32 +1340,35 @@ class HikvisionCameraStreamingDelegate {
   }
 
   async getLocalSnapshot(request) {
-    const now = Date.now();
     this.ensureSnapshotRefreshTimer(request);
-
-    if (!this.snapshotCache?.buffer) {
-      this.scheduleLocalSnapshotRefresh(request);
-      try {
-        return await this.captureStillImageFromHikvision(request);
-      } catch (error) {
-        const rtspUrl = this.rtspStreamUrl("technical");
-        if (!rtspUrl) {
-          throw error;
-        }
-        this.platform.log.debug(`Hikvision still image failed, trying technical RTSP channel: ${error.message}`);
-        return this.captureStillFrameFromRtspStream(request, rtspUrl);
-      }
-    }
-
-    if (this.snapshotCache?.buffer) {
-      const refreshInterval = this.config.snapshotRefreshIntervalMs ?? 10000;
-      if (now - this.snapshotCache.createdAt >= refreshInterval) {
-        this.scheduleLocalSnapshotRefresh(request);
-      }
+    const now = Date.now();
+    const fastTtlMs = Number(this.config.snapshotFastCacheTtlMs ?? 5000);
+    if (this.snapshotCache?.buffer && now - this.snapshotCache.createdAt < fastTtlMs) {
       return this.snapshotCache.buffer;
     }
 
-    this.scheduleLocalSnapshotRefresh(request);
+    const refresh = this.scheduleLocalSnapshotRefresh(request);
+
+    if (this.snapshotCache?.buffer) {
+      return this.snapshotCache.buffer;
+    }
+
+    if (this.config.snapshotBlockingInitialFetch === true) {
+      const initialFetchTimeoutMs = normalizeSnapshotInitialFetchTimeoutMs(this.config.snapshotInitialFetchTimeoutMs);
+      await withTimeout(
+        refresh.catch((error) => {
+          this.platform.log.debug(`Initial Hikvision still image refresh failed for ${this.config.name || this.config.did}: ${error.message}`);
+        }),
+        initialFetchTimeoutMs,
+        `Initial Hikvision still image refresh exceeded ${initialFetchTimeoutMs}ms.`,
+      ).catch((error) => {
+        this.platform.log.debug(`Initial Hikvision still image refresh is still pending for ${this.config.name || this.config.did}: ${error.message}`);
+      });
+      if (this.snapshotCache?.buffer) {
+        return this.snapshotCache.buffer;
+      }
+    }
+
     return placeholderJpeg();
   }
 
@@ -1342,51 +1389,129 @@ class HikvisionCameraStreamingDelegate {
   }
 
   scheduleLocalSnapshotRefresh(request) {
+    const now = Date.now();
+    if (now < this.nextSnapshotRefreshAllowedAt) {
+      return Promise.resolve(this.snapshotCache?.buffer || null);
+    }
     if (this.snapshotInFlight) {
-      return;
-    }
-    if (this.hasHomeKitStreamIntent()) {
-      return;
-    }
-    if (this.hasRecentMonitoringPackets()) {
-      return;
+      return this.snapshotInFlight;
     }
     this.snapshotInFlight = this.refreshLocalSnapshot(request)
       .catch((error) => {
-        this.platform.log.warn(`Failed to refresh local Hikvision snapshot for ${this.config.name || this.config.did}: ${error.message}`);
+        const cooldownMs = Math.max(1000, Number(this.config.snapshotErrorCooldownMs ?? 60000));
+        this.nextSnapshotRefreshAllowedAt = Date.now() + cooldownMs;
+        const message = error.message || "unknown";
+        const previousMessage = this.lastSnapshotErrorMessage;
+        this.lastSnapshotFailureAt = Date.now();
+        this.lastSnapshotErrorMessage = message;
+        const warnIntervalMs = Math.max(1000, Number(this.config.snapshotErrorWarnIntervalMs ?? 300000));
+        const hasUsableSnapshot = Boolean(this.snapshotCache?.buffer);
+        const softLogIntervalMs = Math.max(1000, Number(this.config.snapshotSoftErrorLogIntervalMs ?? 300000));
+        if (hasUsableSnapshot) {
+          if (Date.now() - this.lastSnapshotSoftErrorAt >= softLogIntervalMs) {
+            this.lastSnapshotSoftErrorAt = Date.now();
+            this.platform.log.debug(`Still image refresh failed for ${this.config.name || this.config.did}: ${message}; serving cached image for ${cooldownMs}ms`);
+          }
+        } else if (message !== previousMessage || Date.now() - this.lastSnapshotWarningAt >= warnIntervalMs) {
+          this.lastSnapshotWarningAt = Date.now();
+          this.platform.log.warn(`Failed to refresh local Hikvision snapshot for ${this.config.name || this.config.did}: ${message}; using cached/placeholder image for ${cooldownMs}ms`);
+        } else {
+          this.platform.log.debug(`Still image refresh is still failing for ${this.config.name || this.config.did}: ${message}`);
+        }
       })
       .finally(() => {
         this.snapshotInFlight = null;
       });
+    return this.snapshotInFlight;
   }
 
   async refreshLocalSnapshot(request) {
-
     this.platform.log.debug(`Refreshing local Hikvision snapshot for ${this.config.name || this.config.did}`);
-    if (this.hasHomeKitStreamIntent()) {
-      return this.snapshotCache?.buffer || placeholderJpeg();
-    }
+    const buffer = await this.captureStillFrameFromSharedInput(request);
+    this.snapshotCache = {
+      buffer,
+      createdAt: Date.now(),
+    };
+    this.lastSnapshotSuccessAt = this.snapshotCache.createdAt;
+    this.lastSnapshotBytes = buffer.length;
+    this.nextSnapshotRefreshAllowedAt = 0;
+    this.lastSnapshotErrorMessage = null;
+    this.lastSnapshotFailureAt = 0;
+    this.lastSnapshotSoftErrorAt = 0;
+    return buffer;
+  }
 
-    try {
-      const buffer = await this.captureStillImageFromHikvision(request);
-      this.snapshotCache = {
-        buffer,
-        createdAt: Date.now(),
+  captureStillFrameFromSharedInput(request) {
+    const ffmpeg = this.config.ffmpeg || "/usr/local/bin/ffmpeg";
+    const sharedInput = this.createSharedMainInput("snapshot");
+    const timeoutMs = Math.max(Number(this.config.snapshotTimeoutMs || 4000), 1000);
+    const args = [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-fflags",
+      "+discardcorrupt+nobuffer+genpts",
+      "-probesize",
+      "32768",
+      "-analyzeduration",
+      "100000",
+      "-f",
+      "mpegts",
+      "-i",
+      "pipe:0",
+      "-map",
+      "0:v:0",
+      "-an",
+      "-frames:v",
+      "1",
+      "-f",
+      "mjpeg",
+      "pipe:1",
+    ];
+    const proc = spawn(ffmpeg, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const chunks = [];
+    let stderr = "";
+    let settled = false;
+    let timer = null;
+
+    return new Promise((resolve, reject) => {
+      const finish = (error, buffer) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        sharedInput.destroy();
+        if (error) {
+          reject(error);
+        } else {
+          resolve(buffer);
+        }
       };
-      return buffer;
-    } catch (error) {
-      this.platform.log.debug(`Hikvision still image failed, trying technical RTSP channel: ${error.message}`);
-      const rtspUrl = this.rtspStreamUrl("technical");
-      if (rtspUrl) {
-        const buffer = await this.captureStillFrameFromRtspStream(request, rtspUrl);
-        this.snapshotCache = {
-          buffer,
-          createdAt: Date.now(),
-        };
-        return buffer;
-      }
-      throw error;
-    }
+
+      proc.stdout.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      proc.stderr.setEncoding("utf8");
+      proc.stderr.on("data", (chunk) => {
+        stderr += String(chunk);
+      });
+      proc.once("error", (error) => finish(error));
+      proc.once("exit", (code, signal) => {
+        const buffer = Buffer.concat(chunks);
+        if (code === 0 && buffer.length > 100) {
+          this.platform.log.debug(`Hikvision shared snapshot ready for ${this.config.name || this.config.did}: bytes=${buffer.length}, source=shared-upstream-101`);
+          finish(null, buffer);
+          return;
+        }
+        finish(new Error(`Shared snapshot ffmpeg exited code=${code} signal=${signal || "none"}: ${stderr.trim() || "no JPEG output"}`));
+      });
+      timer = setTimeout(() => {
+        proc.kill("SIGTERM");
+        finish(new Error(`Shared snapshot timed out after ${timeoutMs}ms.`));
+      }, timeoutMs);
+      timer.unref?.();
+      sharedInput.pipe(proc.stdin);
+      proc.stdin.on("error", () => {});
+    });
   }
 
   hasRecentMonitoringPackets() {
@@ -1403,7 +1528,7 @@ class HikvisionCameraStreamingDelegate {
   }
 
   async feedSnapshotFromPacket(packet, request) {
-    if (this.config.updateSnapshotFromLiveStream === false) {
+    if (this.config.updateSnapshotFromLiveStream !== true) {
       return;
     }
 
@@ -1453,177 +1578,6 @@ class HikvisionCameraStreamingDelegate {
         this.snapshotPacketInFlight = null;
       });
     await this.snapshotPacketInFlight;
-  }
-
-  captureStillImageFromHikvision(request) {
-    return new Promise((resolve, reject) => {
-      const ffmpeg = this.config.curl || "curl";
-      const width = request?.width || request?.video?.width || this.config.snapshotWidth || 1280;
-      const height = request?.height || request?.video?.height || this.config.snapshotHeight || 720;
-      const timeoutMs = this.config.snapshotTimeoutMs || 12000;
-      const url = this.hikvisionStillImageUrl();
-      if (!url) {
-        reject(new Error("Hikvision still image URL is unavailable."));
-        return;
-      }
-
-      const args = [
-        "--digest",
-        "--silent",
-        "--show-error",
-        "--fail",
-        "--max-time",
-        String(Math.ceil(timeoutMs / 1000)),
-        "-u",
-        `${this.config.username || "admin"}:${this.config.password || ""}`,
-        "-H",
-        `X-Image-Width: ${width}`,
-        "-H",
-        `X-Image-Height: ${height}`,
-        "-o",
-        "-",
-        url,
-      ];
-      const proc = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"] });
-      const stdout = [];
-      const stderr = [];
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          proc.kill("SIGKILL");
-          reject(new Error("Hikvision still image request timed out."));
-        }
-      }, timeoutMs + 1000);
-
-      proc.stdout.on("data", (chunk) => stdout.push(chunk));
-      proc.stderr.on("data", (chunk) => stderr.push(chunk));
-      proc.on("error", (error) => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          reject(error);
-        }
-      });
-      proc.on("exit", (code) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        const buffer = Buffer.concat(stdout);
-        if (code === 0 && buffer.length > 0) {
-          this.platform.log.debug(`Hikvision still image received for ${this.config.name || this.config.did}: bytes=${buffer.length}`);
-          resolve(buffer);
-          return;
-        }
-        const message = Buffer.concat(stderr).toString().trim();
-        reject(new Error(message ? redactLog(message) : `Hikvision still image exited with code ${code}`));
-      });
-    });
-  }
-
-  captureStillFrameFromRtspStream(request, rtspUrl = this.rtspStreamUrl("technical")) {
-    return new Promise((resolve, reject) => {
-      if (!rtspUrl) {
-        reject(new Error("Configured RTSP stream URL is missing."));
-        return;
-      }
-
-      const ffmpeg = this.config.ffmpeg || "ffmpeg";
-      const width = request?.width || request?.video?.width || this.config.snapshotWidth || 1280;
-      const height = request?.height || request?.video?.height || this.config.snapshotHeight || 720;
-      let settled = false;
-      const timeoutMs = this.config.snapshotTimeoutMs || 12000;
-      const rtspTransport = String(this.config.rtspTransport || "tcp").toLowerCase() === "udp" ? "udp" : "tcp";
-      const args = [
-        "-hide_banner",
-        "-loglevel",
-        this.config.ffmpegDebug ? "info" : "warning",
-        "-rtsp_transport",
-        rtspTransport,
-        "-rtsp_flags",
-        "prefer_tcp",
-        "-probesize",
-        String(this.config.snapshotProbeSize || 1048576),
-        "-analyzeduration",
-        String(this.config.snapshotAnalyzeDuration || 5000000),
-        "-i",
-        rtspUrl,
-        "-map",
-        "0:v:0",
-        "-frames:v",
-        "1",
-        "-vf",
-        `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
-        "-pix_fmt",
-        "yuvj420p",
-        "-q:v",
-        String(this.config.snapshotJpegQuality || 3),
-        "-strict",
-        "unofficial",
-        "-f",
-        "image2pipe",
-        "-vcodec",
-        "mjpeg",
-        "pipe:1",
-      ];
-
-      const proc = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe", "pipe"] });
-      const stdout = [];
-      const stderr = [];
-      const timer = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          proc.kill("SIGKILL");
-          reject(new Error("RTSP snapshot capture timed out."));
-        }
-      }, timeoutMs);
-
-      proc.stdout.on("data", (chunk) => {
-        stdout.push(chunk);
-      });
-
-      proc.stderr.on("data", (chunk) => {
-        stderr.push(chunk);
-        if (this.config.ffmpegDebug) {
-          this.platform.log.info(`[ffmpeg rtsp snapshot] ${redactLog(chunk.toString()).trim()}`);
-        }
-      });
-
-      proc.on("error", (error) => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          reject(error);
-        }
-      });
-
-      proc.on("exit", (code) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        const buffer = Buffer.concat(stdout);
-        if (code === 0 && buffer.length > 0) {
-          resolve(buffer);
-          return;
-        }
-        const message = Buffer.concat(stderr).toString().trim();
-        reject(new Error(message ? redactLog(message) : `RTSP snapshot ffmpeg exited with code ${code}`));
-      });
-    });
-  }
-
-  hikvisionStillImageUrl() {
-    const host = this.config.ip || this.config.host || this.config.ipAddress || this.config.address;
-    if (!host) {
-      return null;
-    }
-    const protocol = String(this.config.httpProtocol || (this.config.https ? "https" : "http")).replace(/:$/, "");
-    const port = Number(this.config.httpPort || (protocol === "https" ? 443 : 80));
-    return `${protocol}://${host}:${port}/ISAPI/Streaming/channels/101/picture`;
   }
 
   rtspStreamUrl(purpose = "live") {
@@ -1938,7 +1892,9 @@ function withTimeout(promise, timeoutMs, message) {
 function normalizedMaxStreams(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 1) {
-    return 2;
+    // Keep live view, the parallel HomeKit stream, and HSV/technical work
+    // from contending for the same two-process default.
+    return 4;
   }
   return Math.floor(parsed);
 }
@@ -2186,11 +2142,104 @@ function placeholderJpeg() {
 }
 
 function looksLikeJpeg(buffer) {
-  return buffer.length > 4
-    && buffer[0] === 0xff
-    && buffer[1] === 0xd8
-    && buffer[buffer.length - 2] === 0xff
-    && buffer[buffer.length - 1] === 0xd9;
+  return Boolean(normalizeHikvisionJpeg(buffer));
+}
+
+function normalizeHikvisionJpeg(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length <= 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+    return null;
+  }
+
+  let end = buffer.length - 1;
+  while (end >= 0 && buffer[end] === 0x00) {
+    end -= 1;
+  }
+  if (end <= 0 || buffer[end - 1] !== 0xff || buffer[end] !== 0xd9) {
+    return null;
+  }
+
+  return end === buffer.length - 1 ? buffer : buffer.subarray(0, end + 1);
+}
+
+function normalizeHikvisionStillImageChannel(value) {
+  const raw = String(value ?? "").trim();
+  const channel = Number(raw);
+  if (Number.isInteger(channel) && channel > 0) {
+    return channel;
+  }
+  return 101;
+}
+
+function normalizeHikvisionStillImageChannels(value, includeFallbacks = false) {
+  const configured = normalizeHikvisionStillImageChannel(value);
+  return includeFallbacks ? uniqueNumbers([configured, 101, 1]) : uniqueNumbers([configured, 101]);
+}
+
+function uniqueNumbers(values) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    if (!Number.isInteger(value) || value <= 0 || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function uniqueStrings(values) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    const normalized = String(value || "").trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function normalizeStillImageDimension(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+
+function normalizeStillImageQuality(value) {
+  const quality = String(value || "better").trim().toLowerCase();
+  if (["best", "better", "normal", "general"].includes(quality)) {
+    return quality;
+  }
+  return "better";
+}
+
+function normalizeHikvisionSnapshotTimeoutMs(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 1500;
+  }
+  return Math.min(Math.max(parsed, 1000), 8000);
+}
+
+function normalizeHikvisionSnapshotConnectTimeoutMs(value, requestTimeoutMs) {
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.min(Math.max(parsed, 1000), Math.max(1000, requestTimeoutMs));
+  }
+  return Math.min(1000, Math.max(1000, requestTimeoutMs));
+}
+
+function normalizeSnapshotInitialFetchTimeoutMs(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 2500;
+  }
+  return Math.min(Math.max(parsed, 500), 5000);
 }
 
 function hasH264DecodableFrame(packets) {

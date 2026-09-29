@@ -5,7 +5,7 @@ class PacketActivityMotionDetector {
     this.platform = platform;
     this.config = config;
     this.metrics = metrics;
-    this.enabled = config.motionDetection === true;
+    this.enabled = config.packetActivityMotionDetection === true;
     this.windowMs = Math.max(Number(config.motionWindowMs || 1000), 250);
     this.cooldownMs = Math.max(Number(config.motionCooldownMs ?? (Number(config.motionCooldownSeconds || 10) * 1000)), 0);
     this.minPackets = Math.max(Number(config.motionMinPackets || 12), 1);

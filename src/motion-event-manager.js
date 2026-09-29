@@ -25,21 +25,15 @@ class MotionEventManager {
 
   setMotionService(motionService) {
     this.motionService = motionService || null;
-    this.transition(this.motionService ? STATES.MONITORING : STATES.IDLE, "motion-service");
+    this.transition(STATES.MONITORING, "device-motion-listener");
   }
 
-  trigger(durationMs) {
-    if (!this.motionService) {
-      this.metrics?.increment("motion_events_rejected_total");
-      this.platform.log.warn(`motion.trigger.rejected camera=${this.cameraName()} reason=motion-service-not-ready`);
-      return false;
-    }
-
+  trigger(durationMs, options = {}) {
     const now = Date.now();
     const cooldownMs = Math.max(Number(this.config.motionCooldownMs ?? (Number(this.config.motionCooldownSeconds || 10) * 1000)), 0);
-    const holdMs = Math.max(Number(durationMs || this.config.hsvMotionDurationMs || this.config.motionHoldMs || 15000), 1000);
+    const holdMs = Math.max(Number(durationMs || this.config.hsvMotionDurationMs || this.config.motionHoldMs || 60000), 1000);
 
-    if (this.state === STATES.COOLDOWN && now - this.lastEventAt < cooldownMs) {
+    if (this.state === STATES.COOLDOWN && now - this.lastEventAt < cooldownMs && options.force !== true) {
       this.metrics?.increment("motion_events_aggregated_total");
       this.platform.log.info(`motion.trigger.aggregated camera=${this.cameraName()} state=${this.state} cooldownRemainingMs=${Math.max(cooldownMs - (now - this.lastEventAt), 0)}`);
       return false;
@@ -50,7 +44,10 @@ class MotionEventManager {
 
     if (this.state === STATES.MOTION_DETECTED || this.state === STATES.PREPARING_RECORDING || this.state === STATES.RECORDING) {
       this.metrics?.increment("motion_events_extended_total");
-      this.platform.log.info(`motion.trigger.extended camera=${this.cameraName()} state=${this.state} holdMs=${holdMs}`);
+      if (options.force === true) {
+        this.lastEventAt = now;
+      }
+      this.platform.log.info(`motion.trigger.extended camera=${this.cameraName()} state=${this.state} holdMs=${holdMs} forced=${options.force === true}`);
       this.scheduleMotionClear();
       return true;
     }
@@ -58,12 +55,34 @@ class MotionEventManager {
     this.eventCount += 1;
     this.metrics?.increment("motion_events_total");
     this.lastEventAt = now;
-    this.transition(STATES.MOTION_DETECTED, "motion-detected");
+    this.transition(STATES.MOTION_DETECTED, options.reason || "motion-detected");
 
     const { Characteristic } = this.platform.api.hap;
-    this.motionService.updateCharacteristic(Characteristic.MotionDetected, true);
+    this.motionService?.updateCharacteristic(Characteristic.MotionDetected, true);
     this.transition(STATES.PREPARING_RECORDING, "homekit-motion-notified");
     this.scheduleMotionClear();
+    return true;
+  }
+
+  clear(reason = "motion-inactive") {
+    clearTimeout(this.motionClearTimer);
+    this.motionActiveUntil = 0;
+    const { Characteristic } = this.platform.api.hap;
+    try {
+      this.motionService?.updateCharacteristic(Characteristic.MotionDetected, false);
+    } catch (error) {
+      this.platform.log.debug(`motion.clear.failed camera=${this.cameraName()} error=${error.message}`);
+    }
+
+    if (this.state === STATES.RECORDING) {
+      this.platform.log.info(`motion.cleared camera=${this.cameraName()} state=${this.state} recordingContinuesUntilNextFragment=true reason=${reason}`);
+      return true;
+    }
+
+    if (this.state !== STATES.COOLDOWN) {
+      this.transition(STATES.COOLDOWN, reason);
+      this.scheduleCooldownClear();
+    }
     return true;
   }
 
@@ -107,7 +126,7 @@ class MotionEventManager {
     const cooldownMs = Math.max(Number(this.config.motionCooldownMs ?? (Number(this.config.motionCooldownSeconds || 10) * 1000)), 0);
     this.cooldownTimer = setTimeout(() => {
       if (this.state === STATES.COOLDOWN) {
-        this.transition(this.motionService ? STATES.MONITORING : STATES.IDLE, "cooldown-complete");
+        this.transition(STATES.MONITORING, "cooldown-complete");
       }
     }, cooldownMs);
     this.cooldownTimer.unref?.();

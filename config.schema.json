@@ -3,7 +3,7 @@
   "pluginType": "platform",
   "singular": true,
   "customUi": false,
-  "headerDisplay": "Hikvision doorbell plugin for Homebridge: RTSP video/audio, HomeKit Doorbell events, HomeKit Secure Video, and two-way audio through HCNetSDK.",
+  "headerDisplay": "Hikvision doorbell plugin for Homebridge: shared RTSP video/audio, HomeKit Doorbell notifications, and HomeKit Secure Video.",
   "schema": {
     "type": "object",
     "properties": {
@@ -84,70 +84,6 @@
               "default": true,
               "description": "Expose this accessory as a real HomeKit Doorbell camera."
             },
-            "hikConnectDoorbell": {
-              "title": "Hik-Connect Doorbell Events",
-              "type": "boolean",
-              "default": false,
-              "description": "Use the Hik-Connect account credentials below to detect incoming calls from the indoor station and trigger the HomeKit Doorbell notification."
-            },
-            "hikConnectUsername": {
-              "title": "Hik-Connect Username",
-              "type": "string",
-              "description": "Hik-Connect account username used only for doorbell call-state polling."
-            },
-            "hikConnectPassword": {
-              "title": "Hik-Connect Password",
-              "type": "string",
-              "format": "password",
-              "description": "Hik-Connect account password. Stored in Homebridge config like the device password."
-            },
-            "hikConnectBaseUrl": {
-              "title": "Hik-Connect API Base URL",
-              "type": "string",
-              "default": "https://api.hik-connect.com",
-              "description": "Leave default unless your Hik-Connect account is assigned to a different regional API host."
-            },
-            "indoorStationSerial": {
-              "title": "Indoor Station Serial",
-              "type": "string",
-              "description": "Serial number of the indoor panel that receives the doorbell call, for example DS-KH6310-W."
-            },
-            "hikConnectPollIntervalMs": {
-              "title": "Hik-Connect Call Poll Interval (ms)",
-              "type": "integer",
-              "default": 2000,
-              "minimum": 1000,
-              "maximum": 10000,
-              "description": "Calls are deduplicated by state. Startup and recovery after a long interruption establish a baseline without creating a ring event."
-            },
-            "doorbellAnswerOnStreamStart": {
-              "title": "Treat Live View as Doorbell Answer",
-              "type": "boolean",
-              "default": false,
-              "description": "Treat opening the HomeKit live stream shortly after a doorbell ring as answering that call and suppress duplicate rings."
-            },
-            "hikConnectAnswerOnStreamStart": {
-              "title": "Answer Hik-Connect Call on Live View",
-              "type": "boolean",
-              "default": false,
-              "description": "Also send a Hik-Connect CallSignal answer command when HomeKit live view opens after a Hik-Connect ring. Experimental; useful when the indoor panel keeps ringing and blocks talkback."
-            },
-            "doorbellAnswerWindowMs": {
-              "title": "Doorbell Answer Window (ms)",
-              "type": "integer",
-              "default": 90000,
-              "minimum": 1000,
-              "maximum": 300000,
-              "description": "How long after a ring a HomeKit live stream start is treated as answering that doorbell call."
-            },
-            "doorbellSuppressAfterAnswerMs": {
-              "title": "Doorbell Suppress After Answer (ms)",
-              "type": "integer",
-              "default": 60000,
-              "minimum": 1000,
-              "maximum": 300000,
-              "description": "How long to suppress additional doorbell events after the live stream answers the call, unless Hik-Connect reports idle earlier."
-            },
             "audio": {
               "title": "Enable Audio",
               "type": "boolean",
@@ -158,7 +94,7 @@
               "title": "Two-Way Audio",
               "type": "boolean",
               "default": false,
-              "description": "Enable HomeKit Talk. For this Hikvision doorbell use the HCNetSDK transport."
+              "description": "Enable HomeKit Talk through the SDK-free Hikvision private voice protocol. Requires Talkback Transport to be set to Private."
             },
             "talkbackTransport": {
               "title": "Talkback Transport",
@@ -166,35 +102,17 @@
               "default": "none",
               "enum": [
                 "none",
-                "hcnet-sdk",
-                "command"
+                "private"
               ],
-              "description": "Speaker transport for HomeKit Talk. Use hcnet-sdk for the Hikvision doorbell."
+              "description": "Speaker uplink transport. Private uses the directly implemented Hikvision login and voice protocol without HCNetSDK or external material files."
             },
-            "hcnetVoiceChannel": {
-              "title": "HCNetSDK Voice Channel",
-              "type": "integer",
-              "default": 1,
-              "minimum": 1
-            },
-            "hcnetSdkLibrary": {
-              "title": "HCNetSDK Library",
-              "type": "string",
-              "default": "/homebridge/hikvision-hcnet-sdk/lib/libhcnetsdk.so",
-              "description": "Path to libhcnetsdk.so on the Homebridge host/container. Keep SDK binaries outside this repository."
-            },
-            "hcnetSdkComponentPath": {
-              "title": "HCNetSDK Component Directory",
-              "type": "string",
-              "default": "/homebridge/hikvision-hcnet-sdk/lib/HCNetSDKCom",
-              "description": "Path to the HCNetSDKCom directory that belongs to the installed HCNetSDK runtime."
-            },
-            "hcnetPort": {
-              "title": "HCNetSDK Device Port",
+            "privatePort": {
+              "title": "Hikvision Private Protocol Port",
               "type": "integer",
               "default": 8000,
               "minimum": 1,
-              "maximum": 65535
+              "maximum": 65535,
+              "description": "Hikvision private protocol TCP port used for SDK-free talkback. The device default is 8000."
             },
             "hsv": {
               "title": "HomeKit Secure Video",
@@ -202,17 +120,36 @@
               "default": false,
               "description": "Enable HomeKit Secure Video support for this camera."
             },
-            "motionSensor": {
-              "title": "Expose Motion Sensor",
+            "doorbellTriggersHsv": {
+              "title": "Record Doorbell Rings",
               "type": "boolean",
               "default": true,
-              "description": "Expose motion events from the doorbell as a HomeKit Motion Sensor."
+              "description": "Use a doorbell ring as an internal HomeKit Secure Video trigger. This does not publish a separate Motion Sensor tile."
             },
-            "nativeEvents": {
-              "title": "Native HCNetSDK Events",
-              "type": "boolean",
-              "default": false,
-              "description": "Subscribe to local HCNetSDK alarm callbacks for supported device events such as motion."
+            "doorbellHsvDurationMs": {
+              "title": "Doorbell Recording Window (ms)",
+              "type": "integer",
+              "default": 60000,
+              "minimum": 1000,
+              "maximum": 300000,
+              "description": "How long to keep the HomeKit Secure Video recording window open after a doorbell ring."
+            },
+            "hsvRtspUrl": {
+              "title": "HKSV RTSP URL",
+              "type": "string",
+              "description": "Advanced override for HomeKit Secure Video recording only. Leave empty to use the main Hikvision channel 101 built from ip, username, and password."
+            },
+            "hsvRtspChannel": {
+              "title": "HKSV RTSP Channel",
+              "type": "integer",
+              "default": 101,
+              "minimum": 1,
+              "description": "HomeKit Secure Video recording channel. Keep this at 101 for DS-KB8112-IM; technical/sub streams should not be used for HKSV."
+            },
+            "hsvRtspPath": {
+              "title": "HKSV RTSP Path",
+              "type": "string",
+              "description": "Advanced override for the HKSV RTSP path only, for example /Streaming/Channels/101. Leave empty for the DS-KB8112-IM default."
             },
             "localHttpApi": {
               "title": "Local HTTP API",
