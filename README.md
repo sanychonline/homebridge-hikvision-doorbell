@@ -41,14 +41,14 @@ audio, motion detection, or HSV recording.
 Install the published package in the same environment where Homebridge runs:
 
 ```bash
-npm install -g homebridge-hikvision-doorbell@0.1.8
+npm install -g homebridge-hikvision-doorbell@0.1.9
 ```
 
 For the official Homebridge Docker image, install into the persistent `/homebridge`
 directory and restart the container:
 
 ```bash
-docker exec homebridge npm install --prefix /homebridge --save homebridge-hikvision-doorbell@0.1.8
+docker exec homebridge npm install --prefix /homebridge --save homebridge-hikvision-doorbell@0.1.9
 docker restart homebridge
 ```
 
