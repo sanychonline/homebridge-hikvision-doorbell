@@ -1196,11 +1196,8 @@ function selectedH264Level(hap, level) {
 }
 
 function normalizeHksvVideoCodec(value, config = {}) {
-  const requested = String(value || "libx264").trim().toLowerCase();
-  if (requested === "copy" && config.hsvAllowVideoCopy !== true) {
-    return "libx264";
-  }
-  return requested || "libx264";
+  const requested = String(value || "copy").trim().toLowerCase();
+  return requested || "copy";
 }
 
 function summarizeMp4Fragment(fragment, videoTrackIds = new Set([1]), audioTrackIds = new Set()) {

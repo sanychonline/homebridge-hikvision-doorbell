@@ -11,6 +11,8 @@ The verified local implementation provides:
 - SDK-free two-way audio through the Hikvision private voice protocol.
 - Still images extracted from the shared channel `101` stream.
 - HomeKit Secure Video recording with video and audio.
+- HSV video is passed through from channel `101` without software video encoding;
+  only the camera audio is converted to the HomeKit-compatible recording codec.
 - Motion analysis from the technical/sub stream `102`.
 - One shared physical RTSP upstream for live view, snapshots, and HSV consumers.
 - Internal motion and recording handling without a separate published Motion Sensor tile.
