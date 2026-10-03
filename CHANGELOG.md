@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.11 - 2026-10-03
+
+- Limit default concurrent HomeKit live `ffmpeg` sessions to two.
+- Force-stop stalled stream, recording, shared relay, and motion-analysis processes after graceful shutdown timeouts.
+- Destroy recording pipes and shared RTSP consumers during cleanup to prevent orphaned processes and memory growth.
+- Document the process lifecycle protections and current release version.
+
 ## 0.1.10 - 2026-09-29
 
 - Publish the verified npm release used by the Synology deployment.
