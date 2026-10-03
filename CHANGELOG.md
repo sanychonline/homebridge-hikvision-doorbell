@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.12 - 2026-10-03
+
+- Use H.264 passthrough from RTSP channel `101` for HSV instead of software `libx264` video encoding.
+- Keep audio transcoding to the HomeKit-compatible recording codec.
+- Document the measured low-load runtime profile after the passthrough change.
+
 ## 0.1.11 - 2026-10-03
 
 - Limit default concurrent HomeKit live `ffmpeg` sessions to two.
