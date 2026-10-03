@@ -47,7 +47,18 @@ class HikvisionSubstreamMotionAnalyzer {
     this.stopped = true;
     clearTimeout(this.restartTimer);
     this.restartTimer = null;
-    this.process?.kill("SIGTERM");
+    const process = this.process;
+    if (process && process.exitCode === null && process.signalCode === null) {
+      process.kill("SIGTERM");
+      const killTimer = setTimeout(() => {
+        if (process.exitCode === null && process.signalCode === null) {
+          this.platform.log.warn(`motion.analysis.process did not exit after SIGTERM camera=${this.cameraName()}; sending SIGKILL`);
+          process.kill("SIGKILL");
+        }
+      }, 3000);
+      killTimer.unref?.();
+      process.once("exit", () => clearTimeout(killTimer));
+    }
     this.process = null;
     this.outputRemainder = Buffer.alloc(0);
     this.previousFrame = null;

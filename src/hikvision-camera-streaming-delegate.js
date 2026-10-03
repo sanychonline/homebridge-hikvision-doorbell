@@ -1097,7 +1097,7 @@ class HikvisionCameraStreamingDelegate {
 
   terminateStreamProcess(sessionId, session, reason) {
     const proc = session?.process;
-    if (!proc || proc.killed) {
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
       return;
     }
 
@@ -1112,14 +1112,15 @@ class HikvisionCameraStreamingDelegate {
     }
     proc.kill("SIGTERM");
 
-    const killTimeoutMs = this.config.streamKillTimeoutMs || 3000;
+    const killTimeoutMs = Math.max(Number(this.config.streamKillTimeoutMs || 3000), 500);
     const killTimer = setTimeout(() => {
-      if (!proc.killed) {
+      if (proc.exitCode === null && proc.signalCode === null) {
         this.platform.log.warn(`Hikvision stream process ${sessionId} did not exit after SIGTERM; sending SIGKILL.`);
         proc.kill("SIGKILL");
       }
     }, killTimeoutMs);
     killTimer.unref?.();
+    proc.once("exit", () => clearTimeout(killTimer));
   }
 
   randomSsrc() {
@@ -1892,9 +1893,9 @@ function withTimeout(promise, timeoutMs, message) {
 function normalizedMaxStreams(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 1) {
-    // Keep live view, the parallel HomeKit stream, and HSV/technical work
-    // from contending for the same two-process default.
-    return 4;
+    // The camera reliably supports two concurrent HomeKit live sessions.
+    // HSV and technical motion analysis use the shared upstream separately.
+    return 2;
   }
   return Math.floor(parsed);
 }

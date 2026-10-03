@@ -719,6 +719,8 @@ class HikvisionCameraRecordingDelegate {
       clearTimeout(activeSession.startupTimer);
       clearTimeout(activeSession.fragmentTimer);
       try {
+        activeSession.sharedInput?.destroy();
+        activeSession.proc.stdin?.end();
         activeSession.proc.stdout?.destroy();
         activeSession.proc.stderr?.destroy();
         activeSession.proc.kill("SIGTERM");
@@ -755,7 +757,9 @@ class HikvisionCameraRecordingDelegate {
     session.abortSignal?.removeEventListener?.("abort", session.abortHandler);
     this.streams.delete(streamId);
 
-    try {
+      try {
+      session.sharedInput?.destroy();
+      session.proc.stdin?.end();
       session.proc.stdout?.destroy();
       session.proc.stderr?.destroy();
       session.proc.kill("SIGTERM");

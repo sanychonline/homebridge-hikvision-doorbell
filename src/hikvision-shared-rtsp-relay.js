@@ -134,6 +134,14 @@ class HikvisionSharedRtspRelay {
     if (source && !source.killed) {
       source.expectedStopReason = reason;
       source.kill("SIGTERM");
+      const killTimer = setTimeout(() => {
+        if (source.exitCode === null && source.signalCode === null) {
+          this.platform.log.warn(`Hikvision shared RTSP upstream did not exit after SIGTERM; sending SIGKILL: reason=${reason}`);
+          source.kill("SIGKILL");
+        }
+      }, 3000);
+      killTimer.unref?.();
+      source.once("exit", () => clearTimeout(killTimer));
     }
   }
 }
