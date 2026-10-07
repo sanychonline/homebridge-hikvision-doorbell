@@ -211,7 +211,7 @@ class HomeKitTalkback {
         decodedBytes: session.decodedBytes,
       };
       if (session.decodedBytes === 0 && receiverStderr.trim()) {
-        this.platform.log.warn(`homekit.talk.receiver.no-audio camera=${this.cameraName()} session=${request.sessionID} ffmpeg=${receiverStderr.trim()}`);
+        this.platform.log.debug(`homekit.talk.receiver.idle camera=${this.cameraName()} session=${request.sessionID} reason=no-homekit-talkback-audio ffmpeg=${receiverStderr.trim()}`);
       }
       this.platform.log.info(`homekit.talk.receiver.exited camera=${this.cameraName()} session=${request.sessionID} code=${code} signal=${signal} decodedChunks=${session.decodedChunks} decodedBytes=${session.decodedBytes}`);
     });
