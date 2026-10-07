@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.14 - 2026-10-07
+
+- Prevent unhandled `EPIPE` errors when live or HSV `ffmpeg` input pipes close during session shutdown.
+- Unpipe shared RTSP consumers and handle closed `ffmpeg` stdin streams before process termination.
+- Mark `0.1.13` as superseded by this release because it could emit the shutdown pipe error.
+
 ## 0.1.13 - 2026-10-07
 
 - Reap timed-out shared snapshot `ffmpeg` processes with a graceful shutdown and hard-kill deadline.
