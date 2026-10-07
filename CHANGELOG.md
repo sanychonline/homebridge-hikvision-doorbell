@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.13 - 2026-10-07
+
+- Reap timed-out shared snapshot `ffmpeg` processes with a graceful shutdown and hard-kill deadline.
+- Destroy snapshot pipes and shared RTSP input during every completion path.
+- Prevent orphan snapshot processes from blocking live video, HSV, and talkback sessions.
+
 ## 0.1.12 - 2026-10-03
 
 - Use H.264 passthrough from RTSP channel `101` for HSV instead of software `libx264` video encoding.
