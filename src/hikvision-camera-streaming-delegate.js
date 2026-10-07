@@ -788,8 +788,14 @@ class HikvisionCameraStreamingDelegate {
 
     const proc = spawn(ffmpeg, args, { stdio: [sharedInput ? "pipe" : "ignore", "ignore", "pipe"] });
     if (sharedInput) {
+      proc.stdin.on("error", (error) => {
+        this.platform.log.debug(`RTSP ffmpeg input pipe closed for ${this.config.name || this.config.did}: ${error.message}`);
+      });
       sharedInput.pipe(proc.stdin);
-      proc.once("exit", () => sharedInput.destroy());
+      proc.once("exit", () => {
+        sharedInput.unpipe(proc.stdin);
+        sharedInput.destroy();
+      });
     }
     const ffmpegStderr = [];
 

@@ -510,6 +510,9 @@ class HikvisionCameraRecordingDelegate {
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
     });
+    proc.stdin.on("error", (error) => {
+      this.platform.log.debug(`Hikvision HKSV ffmpeg input pipe closed for ${this.cameraName()}: ${error.message}`);
+    });
     sharedInput.pipe(proc.stdin);
     const session = {
       streamId,
@@ -559,6 +562,8 @@ class HikvisionCameraRecordingDelegate {
       session.exitError = this.redact(error.message);
     });
     proc.once("exit", (code, exitSignal) => {
+      session.sharedInput?.unpipe(proc.stdin);
+      session.sharedInput?.destroy();
       if (!session.closed && code !== 0) {
         session.exitError = `Hikvision HKSV FFmpeg exited code=${code} signal=${exitSignal || "none"}: ${session.stderr.slice(-4).join(" | ")}`;
       }
