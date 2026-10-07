@@ -1474,8 +1474,28 @@ class HikvisionCameraStreamingDelegate {
     let stderr = "";
     let settled = false;
     let timer = null;
+    let killTimer = null;
 
     return new Promise((resolve, reject) => {
+      const terminateProcess = () => {
+        if (proc.exitCode !== null || proc.signalCode !== null) {
+          return;
+        }
+        try {
+          proc.kill("SIGTERM");
+        } catch (_error) {
+          return;
+        }
+        killTimer = setTimeout(() => {
+          if (proc.exitCode === null && proc.signalCode === null) {
+            this.platform.log.warn(`Hikvision shared snapshot ffmpeg did not exit after SIGTERM; sending SIGKILL for ${this.config.name || this.config.did}`);
+            proc.kill("SIGKILL");
+          }
+        }, Math.max(Number(this.config.snapshotKillTimeoutMs || 3000), 500));
+        killTimer.unref?.();
+        proc.once("exit", () => clearTimeout(killTimer));
+      };
+
       const finish = (error, buffer) => {
         if (settled) {
           return;
@@ -1483,6 +1503,14 @@ class HikvisionCameraStreamingDelegate {
         settled = true;
         clearTimeout(timer);
         sharedInput.destroy();
+        try {
+          proc.stdin?.destroy();
+          proc.stdout?.destroy();
+          proc.stderr?.destroy();
+        } catch (_error) {
+          // Ignore snapshot pipe shutdown races.
+        }
+        terminateProcess();
         if (error) {
           reject(error);
         } else {
@@ -1506,7 +1534,6 @@ class HikvisionCameraStreamingDelegate {
         finish(new Error(`Shared snapshot ffmpeg exited code=${code} signal=${signal || "none"}: ${stderr.trim() || "no JPEG output"}`));
       });
       timer = setTimeout(() => {
-        proc.kill("SIGTERM");
         finish(new Error(`Shared snapshot timed out after ${timeoutMs}ms.`));
       }, timeoutMs);
       timer.unref?.();
